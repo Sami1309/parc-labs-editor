@@ -7,48 +7,65 @@ import * as cheerio from 'cheerio';
 // Initialize Exa client
 const exa = new Exa(process.env.EXA_API_KEY || '');
 
-// Helper to scrape OG Image
-async function getOgImage(url: string): Promise<string | null> {
+// Helper to scrape data (OG Image + other images)
+async function getScrapedData(url: string): Promise<{ ogImage: string | null, images: string[] }> {
   try {
     const response = await fetch(url, { 
         headers: { 'User-Agent': 'Mozilla/5.0 (compatible; AIResearchBot/1.0)' },
-        signal: AbortSignal.timeout(3000) // 3s timeout
+        signal: AbortSignal.timeout(4000) // 4s timeout
     });
-    if (!response.ok) return null;
+    if (!response.ok) return { ogImage: null, images: [] };
     const html = await response.text();
     const $ = cheerio.load(html);
-    const ogImage = $('meta[property="og:image"]').attr('content');
-    return ogImage || null;
+    
+    const ogImage = $('meta[property="og:image"]').attr('content') || null;
+    
+    // Scrape other images for asset nodes
+    const images: string[] = [];
+    $('img').each((_, el) => {
+        const src = $(el).attr('src');
+        if (src && src.startsWith('http') && !src.includes('icon') && !src.includes('logo')) {
+            // Basic filter for likely content images
+            images.push(src);
+        }
+    });
+
+    return { ogImage, images: images.slice(0, 5) }; // Limit to 5 images
   } catch (e) {
-    return null;
+    return { ogImage: null, images: [] };
   }
 }
 
 export async function POST(req: Request) {
   try {
-    const { prompt } = await req.json();
+    const { prompt, parentNodeId } = await req.json();
 
     if (!prompt) {
       return new Response(JSON.stringify({ error: 'Prompt is required' }), { status: 400 });
     }
 
+    const isDeepDive = !!parentNodeId;
+
     // 1. Generate search queries using Gemini
     const { object: searchPlan } = await generateObject({
       model: google('models/gemini-3-pro-preview'),
       schema: z.object({
-        queries: z.array(z.string()).describe('List of 3-5 specific search queries to research the video topic'),
+        queries: z.array(z.string()).describe('List of 2-3 specific search queries.'),
         angle: z.string().describe('The creative angle or direction for the research'),
       }),
-      prompt: `You are an expert video researcher. The user wants to make a video about: "${prompt}".
-      Generate a research plan with 3-5 specific, high-quality search queries to find interesting assets, facts, and angles.
-      Focus on finding unique, non-obvious information.`,
+      prompt: `You are an expert video researcher. 
+      ${isDeepDive 
+        ? `The user wants to deep dive into a specific aspect: "${prompt}". Find detailed info and visual assets.` 
+        : `The user wants to make a video about: "${prompt}". Generate a research plan.`}
+      
+      Generate 2-3 specific, high-quality search queries.`,
     });
 
-    // 2. Execute searches using Exa (Server-side)
+    // 2. Execute searches using Exa
     const searchPromises = searchPlan.queries.map(async (query) => {
       try {
         const result = await exa.searchAndContents(query, {
-          numResults: 2,
+          numResults: 3, // Fetch a few more to filter
           text: true,
           highlights: true,
         });
@@ -67,39 +84,45 @@ export async function POST(req: Request) {
 
     // 3. Fetch Images (Parallel)
     const resultsWithImages = await Promise.all(uniqueResults.map(async (result) => {
-        const ogImage = await getOgImage(result.url);
-        return { ...result, ogImage };
+        const scraped = await getScrapedData(result.url);
+        return { ...result, ...scraped };
     }));
 
-    // 4. Generate final nodes using Gemini (Non-streaming for simplicity without ai/react)
-    // We will just return the full object at once since we removed the streaming client code.
+    // 4. Generate final nodes
     const { object: finalResult } = await generateObject({
         model: google('models/gemini-3-pro-preview'),
         schema: z.object({
             nodes: z.array(z.object({
                 title: z.string(),
                 url: z.string(),
-                content: z.string().describe('A concise, interesting summary of the finding that prompts a deep dive.'),
+                content: z.string().describe('A concise, interesting summary.'),
                 imageUrl: z.string().optional(),
+                type: z.enum(['finding', 'asset']).describe('Use "asset" if the result contains multiple good images/videos, otherwise "finding".'),
+                assets: z.array(z.string()).optional().describe('List of image URLs if type is asset'),
+                suggestedQuestion: z.string().describe('A thought-provoking question to prompt further research on this specific node.'),
+                suggestedPaths: z.array(z.string()).describe('3 distinct, interesting directions to take the research from here.'),
             })),
         }),
         prompt: `
-            You are a research assistant. I have performed a search for "${prompt}" and found the following results.
+            You are a research assistant. Process these search results into "Research Nodes".
             
+            Context: ${isDeepDive ? 'Deep dive research' : 'Initial broad research'}
+            Topic: "${prompt}"
+
             Raw Results:
             ${JSON.stringify(resultsWithImages.map(r => ({
                 title: r.title,
                 url: r.url,
                 text: (r as any).highlights?.[0] || r.text?.substring(0, 500),
-                ogImage: r.ogImage
+                ogImage: r.ogImage,
+                images: r.images
             })))}
 
-            Please process these results into a list of "Research Nodes".
-            For each result:
-            1. Create a catchy title.
-            2. Write a summary (content) that explains WHY this is interesting for the video. Don't just copy the text. Summarize the key insight.
-            3. Include the URL.
-            4. Include the 'ogImage' as 'imageUrl' if it exists.
+            Requirements:
+            1. Generate exactly ${isDeepDive ? '4-5' : '4-5'} nodes.
+            2. ${isDeepDive ? 'At least one node MUST be an "asset" type node containing multiple images from the source.' : 'Focus on interesting facts and angles.'}
+            3. For "asset" nodes, populate the 'assets' array with the provided image URLs.
+            4. For every node, provide a 'suggestedQuestion' and 3 'suggestedPaths' for the user to click.
         `,
     });
 

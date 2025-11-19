@@ -10,6 +10,12 @@ export interface NodeData {
   content?: string;
   url?: string;
   source?: string;
+  imageUrl?: string;
+  // New fields
+  type?: 'finding' | 'asset';
+  assets?: string[]; // For asset nodes
+  suggestedQuestion?: string;
+  suggestedPaths?: string[];
+  isLoading?: boolean; // For UI state
   [key: string]: any;
 }
-

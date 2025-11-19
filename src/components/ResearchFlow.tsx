@@ -18,7 +18,8 @@ import '@xyflow/react/dist/style.css';
 import StartNode from './nodes/StartNode';
 import ResultNode from './nodes/ResultNode';
 import { PromptBar } from './PromptBar';
-import { SearchResult } from '@/types';
+import { ResearchDialog } from './ResearchDialog';
+import { NodeData } from '@/types';
 
 const nodeTypes = {
   start: StartNode,
@@ -37,52 +38,61 @@ const initialNodes: Node[] = [
 export default function ResearchFlow() {
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+  
+  // UI State
   const [isPromptOpen, setIsPromptOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  
+  // Dialog State
+  const [dialogState, setDialogState] = useState<{
+    isOpen: boolean;
+    nodeId: string | null;
+    nodeTitle: string;
+    suggestedQuestion?: string;
+    suggestedPaths?: string[];
+  }>({
+    isOpen: false,
+    nodeId: null,
+    nodeTitle: '',
+  });
 
-  const updateGraph = (newResults: any[]) => {
+  const updateGraph = (newResults: any[], parentId: string) => {
       if (!newResults) return;
 
-      const startNode = nodes.find((n) => n.id === 'start');
-      const startX = startNode?.position.x || 0;
-      const startY = startNode?.position.y || 0;
+      const parentNode = nodes.find((n) => n.id === parentId);
+      const parentX = parentNode?.position.x || 0;
+      const parentY = parentNode?.position.y || 0;
       
       const resultNodes: Node[] = newResults.map((result, index) => {
-        // Layout logic
-        const angle = (index / (newResults.length - 1 || 1)) * Math.PI - Math.PI;
-        const xOffset = (index - (newResults.length - 1) / 2) * 350; // Wider spacing for cards
+        // Layout logic: Fan out below the parent
+        const totalWidth = (newResults.length - 1) * 350;
+        const startXOffset = -totalWidth / 2;
+        const xOffset = startXOffset + (index * 350);
         
         return {
-          id: `result-${index}`, // Stable ID based on index for streaming updates
+          id: `result-${Date.now()}-${index}`, // Unique ID
           type: 'result',
           position: { 
-            x: startX + xOffset, 
-            y: startY + 400 + (Math.abs(index - (newResults.length - 1) / 2) * 50) 
+            x: parentX + xOffset, 
+            y: parentY + 450 + (Math.random() * 50) // Slight vertical stagger
           },
           data: { 
-            label: result.title,
-            content: result.content,
-            url: result.url,
-            source: result.url,
-            imageUrl: result.imageUrl
+            ...result,
+            label: result.title, // Fallback
           },
         };
       });
 
       const resultEdges: Edge[] = resultNodes.map((node) => ({
-        id: `e-start-${node.id}`,
-        source: 'start',
+        id: `e-${parentId}-${node.id}`,
+        source: parentId,
         target: node.id,
         animated: true,
         style: { stroke: '#9ca3af' },
       }));
 
-      // Merge with initial start node
-      setNodes((nds) => {
-          const start = nds.find(n => n.id === 'start');
-          return start ? [start, ...resultNodes] : [...resultNodes];
-      });
-      setEdges((eds) => resultEdges);
+      setNodes((nds) => [...nds, ...resultNodes]);
+      setEdges((eds) => [...eds, ...resultEdges]);
   };
 
   const onConnect = useCallback(
@@ -93,81 +103,63 @@ export default function ResearchFlow() {
   const onNodeClick = useCallback((event: React.MouseEvent, node: Node) => {
     if (node.type === 'start') {
       setIsPromptOpen(true);
+    } else if (node.type === 'result') {
+        // Open Deep Dive Dialog
+        setDialogState({
+            isOpen: true,
+            nodeId: node.id,
+            nodeTitle: node.data.title as string,
+            suggestedQuestion: node.data.suggestedQuestion as string,
+            suggestedPaths: node.data.suggestedPaths as string[],
+        });
     }
   }, []);
 
-  const handleSearch = async (prompt: string) => {
+  const handleInitialSearch = async (prompt: string) => {
     setIsPromptOpen(false);
     setIsLoading(true);
+    // Set start node loading? Maybe just global loading for initial search
+    
+    await performResearch(prompt, 'start');
+    setIsLoading(false);
+  };
 
+  const handleDeepDive = async (prompt: string) => {
+      const { nodeId } = dialogState;
+      if (!nodeId) return;
+
+      setDialogState(prev => ({ ...prev, isOpen: false }));
+      
+      // Set specific node to loading
+      setNodes(nds => nds.map(n => 
+          n.id === nodeId ? { ...n, data: { ...n.data, isLoading: true } } : n
+      ));
+
+      await performResearch(prompt, nodeId);
+
+      // Remove loading state
+      setNodes(nds => nds.map(n => 
+        n.id === nodeId ? { ...n, data: { ...n.data, isLoading: false } } : n
+      ));
+  };
+
+  const performResearch = async (prompt: string, parentId: string) => {
     try {
       const response = await fetch('/api/research', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ prompt }),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt, parentNodeId: parentId === 'start' ? undefined : parentId }),
       });
 
       if (!response.ok) throw new Error('Network response was not ok');
-      if (!response.body) throw new Error('No response body');
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-      let accumulatedNodes: any[] = [];
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        
-        // The stream from streamObject returns chunks of the final JSON object.
-        // However, parsing partial JSON is tricky. 
-        // Since we are using streamObject on the server, it returns a text stream that accumulates the JSON.
-        // A simpler approach without useObject is to wait for the full response or use a different streaming strategy.
-        // BUT, to keep the "streaming" feel without the library, we can try to parse the buffer if it's valid JSON,
-        // or just wait for the final result if we can't easily parse partials.
-        
-        // Actually, streamObject returns a stream of text parts.
-        // Let's try to parse the buffer as it grows.
-        // If the server is sending a standard text stream of the JSON object, we might need to be careful.
-        
-        // ALTERNATIVE: Let's just parse the final result for now to ensure stability without the library,
-        // OR try to parse the "nodes" array if possible.
-        
-        // For a robust manual implementation without ai/react, we'll just read the whole stream and update at the end,
-        // OR we can try to parse the accumulating JSON string.
-        
-        try {
-            // Attempt to parse the current buffer as JSON
-            // This will likely fail until the very end unless the server sends line-delimited JSON.
-            // streamObject sends an accumulating JSON string.
-            const parsed = JSON.parse(buffer);
-            if (parsed && parsed.nodes) {
-                accumulatedNodes = parsed.nodes;
-                updateGraph(accumulatedNodes);
-            }
-        } catch (e) {
-            // Expected error while JSON is incomplete
-        }
-      }
       
-      // Final parse to ensure we got everything
-      try {
-          const parsed = JSON.parse(buffer);
-          if (parsed && parsed.nodes) {
-              updateGraph(parsed.nodes);
-          }
-      } catch (e) {
-          console.error("Final parse failed", e);
+      const data = await response.json();
+      if (data && data.nodes) {
+          updateGraph(data.nodes, parentId);
       }
 
     } catch (error) {
       console.error('Error researching:', error);
-    } finally {
-      setIsLoading(false);
     }
   };
 
@@ -191,8 +183,17 @@ export default function ResearchFlow() {
       <PromptBar 
         isOpen={isPromptOpen} 
         onClose={() => setIsPromptOpen(false)} 
-        onSubmit={handleSearch}
+        onSubmit={handleInitialSearch}
         isLoading={isLoading}
+      />
+
+      <ResearchDialog 
+        isOpen={dialogState.isOpen}
+        onClose={() => setDialogState(prev => ({ ...prev, isOpen: false }))}
+        onSubmit={handleDeepDive}
+        suggestedQuestion={dialogState.suggestedQuestion}
+        suggestedPaths={dialogState.suggestedPaths}
+        nodeTitle={dialogState.nodeTitle}
       />
     </div>
   );

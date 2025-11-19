@@ -2,9 +2,27 @@ import { google } from '@ai-sdk/google';
 import { generateObject } from 'ai';
 import { z } from 'zod';
 import Exa from 'exa-js';
+import * as cheerio from 'cheerio';
 
 // Initialize Exa client
 const exa = new Exa(process.env.EXA_API_KEY || '');
+
+// Helper to scrape OG Image
+async function getOgImage(url: string): Promise<string | null> {
+  try {
+    const response = await fetch(url, { 
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; AIResearchBot/1.0)' },
+        signal: AbortSignal.timeout(3000) // 3s timeout
+    });
+    if (!response.ok) return null;
+    const html = await response.text();
+    const $ = cheerio.load(html);
+    const ogImage = $('meta[property="og:image"]').attr('content');
+    return ogImage || null;
+  } catch (e) {
+    return null;
+  }
+}
 
 export async function POST(req: Request) {
   try {
@@ -16,11 +34,7 @@ export async function POST(req: Request) {
 
     // 1. Generate search queries using Gemini
     const { object: searchPlan } = await generateObject({
-      model: google('models/gemini-3-pro-preview'), // Using 1.5 Pro as 3.0 might not be available in the SDK alias yet, or I should check the model name. User said "gemini 3.0", I will try to use a model name that maps to it or fall back to a known one.
-      // Note: The user specified Gemini 3.0. I will try to use 'gemini-1.5-pro' as a safe default if 3.0 isn't explicitly aliased, or check if I can specify the model string directly.
-      // For now, I'll use 'gemini-1.5-pro' which is robust, or 'models/gemini-1.5-pro-latest'.
-      // If the user specifically wants 3.0, I might need to check the exact model string.
-      // Let's assume 'gemini-1.5-pro' is sufficient for the agentic logic for now.
+      model: google('models/gemini-3-pro-preview'),
       schema: z.object({
         queries: z.array(z.string()).describe('List of 3-5 specific search queries to research the video topic'),
         angle: z.string().describe('The creative angle or direction for the research'),
@@ -30,12 +44,7 @@ export async function POST(req: Request) {
       Focus on finding unique, non-obvious information.`,
     });
 
-    console.log('Search Plan:', searchPlan);
-
-    // 2. Execute searches using Exa
-    const allResults = [];
-    
-    // We'll run searches in parallel
+    // 2. Execute searches using Exa (Server-side)
     const searchPromises = searchPlan.queries.map(async (query) => {
       try {
         const result = await exa.searchAndContents(query, {
@@ -52,25 +61,50 @@ export async function POST(req: Request) {
 
     const searchResults = await Promise.all(searchPromises);
     const flatResults = searchResults.flat();
-
-    // 3. Deduplicate and format results
+    
+    // Deduplicate
     const uniqueResults = Array.from(new Map(flatResults.map(item => [item.url, item])).values());
 
-    // 4. (Optional) We could use Gemini to summarize these, but for speed we'll just return the Exa highlights/text.
-    // Let's format them for the frontend.
-    const formattedResults = uniqueResults.map(result => ({
-      title: result.title || 'Untitled',
-      url: result.url,
-      content: result.highlights?.[0] || result.text?.substring(0, 200) + '...' || '',
-      score: result.score,
-    })).slice(0, 6); // Limit to 6 results to avoid clutter
+    // 3. Fetch Images (Parallel)
+    const resultsWithImages = await Promise.all(uniqueResults.map(async (result) => {
+        const ogImage = await getOgImage(result.url);
+        return { ...result, ogImage };
+    }));
 
-    return new Response(JSON.stringify({ 
-      results: formattedResults,
-      angle: searchPlan.angle
-    }), { 
-      status: 200,
-      headers: { 'Content-Type': 'application/json' }
+    // 4. Generate final nodes using Gemini (Non-streaming for simplicity without ai/react)
+    // We will just return the full object at once since we removed the streaming client code.
+    const { object: finalResult } = await generateObject({
+        model: google('models/gemini-3-pro-preview'),
+        schema: z.object({
+            nodes: z.array(z.object({
+                title: z.string(),
+                url: z.string(),
+                content: z.string().describe('A concise, interesting summary of the finding that prompts a deep dive.'),
+                imageUrl: z.string().optional(),
+            })),
+        }),
+        prompt: `
+            You are a research assistant. I have performed a search for "${prompt}" and found the following results.
+            
+            Raw Results:
+            ${JSON.stringify(resultsWithImages.map(r => ({
+                title: r.title,
+                url: r.url,
+                text: (r as any).highlights?.[0] || r.text?.substring(0, 500),
+                ogImage: r.ogImage
+            })))}
+
+            Please process these results into a list of "Research Nodes".
+            For each result:
+            1. Create a catchy title.
+            2. Write a summary (content) that explains WHY this is interesting for the video. Don't just copy the text. Summarize the key insight.
+            3. Include the URL.
+            4. Include the 'ogImage' as 'imageUrl' if it exists.
+        `,
+    });
+
+    return new Response(JSON.stringify(finalResult), {
+        headers: { 'Content-Type': 'application/json' }
     });
 
   } catch (error) {
@@ -78,4 +112,3 @@ export async function POST(req: Request) {
     return new Response(JSON.stringify({ error: 'Internal Server Error' }), { status: 500 });
   }
 }
-

@@ -1,45 +1,69 @@
 import React, { memo } from 'react';
 import { Handle, Position } from '@xyflow/react';
-import { ExternalLink, FileText } from 'lucide-react';
+import { ExternalLink, FileText, Image as ImageIcon } from 'lucide-react';
+import { motion } from 'framer-motion';
 
 const ResultNode = ({ data, isConnectable }: any) => {
   return (
-    <div className="px-4 py-3 shadow-md rounded-lg bg-white border border-stone-200 w-64 hover:shadow-lg transition-shadow">
+    <motion.div 
+      initial={{ opacity: 0, scale: 0.9 }}
+      animate={{ opacity: 1, scale: 1 }}
+      transition={{ duration: 0.3 }}
+      className="w-72 bg-white rounded-xl shadow-lg border border-stone-200 overflow-hidden hover:shadow-xl transition-shadow"
+    >
       <Handle
         type="target"
         position={Position.Top}
         isConnectable={isConnectable}
-        className="w-2 h-2 bg-stone-400"
+        className="w-3 h-3 bg-stone-400 !-top-1.5"
       />
-      <div className="flex items-start mb-2">
-        <div className="rounded-full bg-blue-50 p-1.5 mr-2 mt-0.5">
-            <FileText className="w-3 h-3 text-blue-500" />
-        </div>
-        <div>
-            <div className="text-xs font-bold text-stone-800 line-clamp-2">{data.label}</div>
-            {data.source && (
-                <div className="text-[10px] text-stone-500 mt-0.5">{new URL(data.source).hostname}</div>
-            )}
-        </div>
-      </div>
       
-      <div className="text-[10px] text-stone-600 line-clamp-3 mb-2 leading-relaxed">
-        {data.content}
+      {/* Image Section */}
+      <div className="h-32 bg-stone-100 relative overflow-hidden group">
+        {data.imageUrl ? (
+          <img 
+            src={data.imageUrl} 
+            alt={data.label} 
+            className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+            onError={(e) => {
+              (e.target as HTMLImageElement).style.display = 'none';
+              (e.target as HTMLImageElement).nextElementSibling?.classList.remove('hidden');
+            }}
+          />
+        ) : null}
+        <div className={`absolute inset-0 flex items-center justify-center bg-stone-100 ${data.imageUrl ? 'hidden' : ''}`}>
+          <ImageIcon className="w-8 h-8 text-stone-300" />
+        </div>
+        <div className="absolute top-2 right-2 bg-black/50 backdrop-blur-sm text-white text-[10px] px-2 py-1 rounded-full">
+            {new URL(data.source || data.url).hostname.replace('www.', '')}
+        </div>
       </div>
 
-      {data.url && (
-        <a 
-            href={data.url} 
-            target="_blank" 
-            rel="noopener noreferrer"
-            className="flex items-center text-[10px] text-blue-600 hover:underline mt-2 pt-2 border-t border-stone-100"
-        >
-            Visit Source <ExternalLink className="w-3 h-3 ml-1" />
-        </a>
-      )}
-    </div>
+      {/* Content Section */}
+      <div className="p-4">
+        <div className="flex items-start mb-2">
+          <h3 className="text-sm font-bold text-stone-800 leading-tight line-clamp-2">
+            {data.label}
+          </h3>
+        </div>
+        
+        <p className="text-xs text-stone-600 leading-relaxed mb-3 line-clamp-4">
+          {data.content}
+        </p>
+
+        {data.url && (
+          <a 
+              href={data.url} 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="inline-flex items-center text-[10px] font-medium text-blue-600 hover:text-blue-700 hover:underline"
+          >
+              Read Source <ExternalLink className="w-3 h-3 ml-1" />
+          </a>
+        )}
+      </div>
+    </motion.div>
   );
 };
 
 export default memo(ResultNode);
-

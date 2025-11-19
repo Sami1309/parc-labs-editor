@@ -1,14 +1,28 @@
 'use client';
 
 import React, { useState } from 'react';
+import { useNodesState, useEdgesState, Node } from '@xyflow/react';
 import { Sidebar } from './Sidebar';
 import ResearchFlow from './ResearchFlow';
 import { Storyboard } from './Storyboard';
 import { Editor } from './Editor';
 
+const initialNodes: Node[] = [
+  {
+    id: 'start',
+    type: 'start',
+    position: { x: 0, y: 0 },
+    data: { label: 'Start Research', isLoading: false },
+  },
+];
+
 export function AppShell() {
   const [activeView, setActiveView] = useState<'research' | 'storyboard' | 'editor'>('research');
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+
+  // Lifted state for ResearchFlow
+  const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState([]);
 
   return (
     <div className="flex h-screen w-full overflow-hidden bg-stone-50">
@@ -20,11 +34,19 @@ export function AppShell() {
       />
       
       <main className="flex-1 h-full relative overflow-hidden">
-        {activeView === 'research' && <ResearchFlow />}
-        {activeView === 'storyboard' && <Storyboard />}
+        {activeView === 'research' && (
+          <ResearchFlow 
+            nodes={nodes}
+            edges={edges}
+            onNodesChange={onNodesChange}
+            onEdgesChange={onEdgesChange}
+            setNodes={setNodes}
+            setEdges={setEdges}
+          />
+        )}
+        {activeView === 'storyboard' && <Storyboard researchNodes={nodes} />}
         {activeView === 'editor' && <Editor />}
       </main>
     </div>
   );
 }
-

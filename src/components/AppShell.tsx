@@ -6,6 +6,7 @@ import { Sidebar } from './Sidebar';
 import ResearchFlow from './ResearchFlow';
 import { Storyboard } from './Storyboard';
 import { Editor } from './Editor';
+import { HookGenerator } from './HookGenerator';
 
 const initialNodes: Node[] = [
   {
@@ -17,7 +18,7 @@ const initialNodes: Node[] = [
 ];
 
 export function AppShell() {
-  const [activeView, setActiveView] = useState<'research' | 'storyboard' | 'editor'>('research');
+  const [activeView, setActiveView] = useState<'hook' | 'research' | 'storyboard' | 'editor'>('hook');
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
 
   // Lifted state for ResearchFlow
@@ -34,6 +35,7 @@ export function AppShell() {
       />
       
       <main className="flex-1 h-full relative overflow-hidden">
+        {activeView === 'hook' && <HookGenerator />}
         {activeView === 'research' && (
           <ResearchFlow 
             nodes={nodes}

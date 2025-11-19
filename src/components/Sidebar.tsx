@@ -6,19 +6,21 @@ import {
   Clapperboard, 
   Edit3, 
   ChevronLeft, 
-  ChevronRight 
+  ChevronRight,
+  Magnet
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface SidebarProps {
-  activeView: 'research' | 'storyboard' | 'editor';
-  onViewChange: (view: 'research' | 'storyboard' | 'editor') => void;
+  activeView: 'hook' | 'research' | 'storyboard' | 'editor';
+  onViewChange: (view: 'hook' | 'research' | 'storyboard' | 'editor') => void;
   isCollapsed: boolean;
   toggleCollapse: () => void;
 }
 
 export function Sidebar({ activeView, onViewChange, isCollapsed, toggleCollapse }: SidebarProps) {
   const items = [
+    { id: 'hook', label: 'Hook', icon: Magnet },
     { id: 'research', label: 'Research', icon: FlaskConical },
     { id: 'storyboard', label: 'Storyboard', icon: Clapperboard },
     { id: 'editor', label: 'Editor', icon: Edit3 },

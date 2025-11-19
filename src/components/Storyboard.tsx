@@ -2,34 +2,13 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { Node } from '@xyflow/react';
-import { Send, Sparkles, Image as ImageIcon, FileText, Loader2, Save, Layout, Trash2, FolderOpen, ChevronDown } from 'lucide-react';
+import { Send, Sparkles, Image as ImageIcon, FileText, Loader2, Save, Layout, Trash2, FolderOpen, ChevronDown, Maximize2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import ReactMarkdown from 'react-markdown';
+import { StoryboardScene, Message, SavedStoryboardSession } from '@/types';
 
 interface StoryboardProps {
   researchNodes: Node[];
-}
-
-interface StoryboardScene {
-  id: string;
-  text: string;
-  image?: string;
-  notes?: string;
-}
-
-interface Message {
-  id: string;
-  role: 'user' | 'assistant';
-  content: string;
-}
-
-interface SavedStoryboardSession {
-  id: string;
-  name: string;
-  selectedNodeId: string | null;
-  messages: Message[];
-  storyboard: StoryboardScene[];
-  timestamp: number;
 }
 
 export function Storyboard({ researchNodes }: StoryboardProps) {
@@ -155,28 +134,24 @@ export function Storyboard({ researchNodes }: StoryboardProps) {
     }
   };
 
-  const handleGenerateStoryboard = async () => {
+  const handleGenerateStoryboard = async (mode: 'standard' | 'expand' = 'standard') => {
     if (!selectedNodeId) return;
     setIsGenerating(true);
-    setGenerationStep('Initializing generation...');
+    setGenerationStep(mode === 'expand' ? 'Expanding narrative...' : 'Initializing generation...');
     
     try {
-      // We'll use a standard fetch but we can simulate steps or update the UI if the backend supported streaming status
-      // For now we will simulate a multi-step process via UI delay to show "progress" before the final result arrives
-      // In a real streaming implementation, we'd read a stream of events.
-      
       setGenerationStep('Analyzing conversation context...');
       await new Promise(r => setTimeout(r, 800));
       
       setGenerationStep('Retrieving visual assets via Exa...');
-      // This is where we'd ideally have real progress. The backend will do the work.
       
       const response = await fetch('/api/storyboard-generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           messages,
-          selectedNode: researchNodes.find(n => n.id === selectedNodeId)?.data
+          selectedNode: researchNodes.find(n => n.id === selectedNodeId)?.data,
+          mode // Pass the mode to the API
         })
       });
 
@@ -353,8 +328,18 @@ export function Storyboard({ researchNodes }: StoryboardProps) {
                    >
                      Change Research
                    </button>
+                   {storyboard.length > 0 && (
+                       <button
+                            onClick={() => handleGenerateStoryboard('expand')}
+                            disabled={isGenerating}
+                            className="bg-stone-100 text-stone-700 px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-stone-200 transition-colors flex items-center gap-2 disabled:opacity-50 border border-stone-200"
+                        >
+                            <Maximize2 className="w-3 h-3" />
+                            Expand Story
+                        </button>
+                   )}
                    <button
-                     onClick={handleGenerateStoryboard}
+                     onClick={() => handleGenerateStoryboard('standard')}
                      disabled={isGenerating}
                      className="bg-purple-600 text-white px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-purple-700 transition-colors flex items-center gap-2 disabled:opacity-50 shadow-sm shadow-purple-200"
                    >

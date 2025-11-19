@@ -9,7 +9,7 @@ const exa = new Exa(process.env.EXA_API_KEY || '');
 
 export async function POST(req: Request) {
   try {
-    const { messages, selectedNode } = await req.json();
+    const { messages, selectedNode, mode = 'standard' } = await req.json();
 
     // 1. Extract keywords for asset search from the conversation and context
     const { object: searchQueries } = await generateObject({
@@ -68,6 +68,10 @@ export async function POST(req: Request) {
 
     const imageList = Array.from(availableImages);
 
+    const isExpand = mode === 'expand';
+    const sceneCountPrompt = isExpand ? 'Generate 8-12 detailed scenes' : 'Generate 4-6 compelling scenes';
+    const detailPrompt = isExpand ? 'Provide more plot depth, character development, and descriptive notes.' : '';
+
     const { object } = await generateObject({
       model: google('models/gemini-3-pro-preview'),
       schema: z.object({
@@ -89,7 +93,8 @@ export async function POST(req: Request) {
         Conversation History:
         ${messages.map((m: any) => `${m.role}: ${m.content}`).join('\n')}
         
-        Generate 4-6 compelling scenes that tell a story.
+        ${sceneCountPrompt} that tell a story.
+        ${detailPrompt}
         Prioritize using the Available Images where they fit the narrative.
         If no specific image matches a scene, leave the image field empty.
       `,

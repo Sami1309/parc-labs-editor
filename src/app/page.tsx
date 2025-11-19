@@ -1,9 +1,5 @@
-import ResearchFlow from '@/components/ResearchFlow';
+import { AppShell } from '@/components/AppShell';
 
 export default function Home() {
-  return (
-    <main className="w-full h-screen">
-      <ResearchFlow />
-    </main>
-  );
+  return <AppShell />;
 }

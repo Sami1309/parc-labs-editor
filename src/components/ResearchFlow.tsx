@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useState, useEffect } from 'react';
 import {
   ReactFlow,
   Background,
@@ -21,7 +21,7 @@ import { PromptBar } from './PromptBar';
 import { ResearchDialog } from './ResearchDialog';
 import { NodeData } from '@/types';
 
-import { Plus } from 'lucide-react';
+import { Plus, Save, FolderOpen, ChevronDown } from 'lucide-react';
 
 const nodeTypes = {
   start: StartNode,
@@ -37,6 +37,14 @@ const initialNodes: Node[] = [
   },
 ];
 
+interface SavedSession {
+  id: string;
+  name: string;
+  nodes: Node[];
+  edges: Edge[];
+  timestamp: number;
+}
+
 export default function ResearchFlow() {
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
@@ -47,6 +55,9 @@ export default function ResearchFlow() {
     nodeId: null,
   });
   const [isLoading, setIsLoading] = useState(false);
+  const [sessionName, setSessionName] = useState<string | null>(null);
+  const [savedSessions, setSavedSessions] = useState<SavedSession[]>([]);
+  const [showLoadMenu, setShowLoadMenu] = useState(false);
   
   // Dialog State
   const [dialogState, setDialogState] = useState<{
@@ -62,6 +73,45 @@ export default function ResearchFlow() {
     nodeId: null,
     nodeTitle: '',
   });
+
+  // Load saved sessions from local storage on mount
+  useEffect(() => {
+    const saved = localStorage.getItem('research_sessions');
+    if (saved) {
+      try {
+        setSavedSessions(JSON.parse(saved));
+      } catch (e) {
+        console.error('Failed to parse saved sessions', e);
+      }
+    }
+  }, []);
+
+  const saveSession = () => {
+    if (!sessionName) return; // Should probably prompt for name if null, or auto-generate
+    
+    const session: SavedSession = {
+      id: Date.now().toString(),
+      name: sessionName,
+      nodes,
+      edges,
+      timestamp: Date.now(),
+    };
+
+    const newSessions = [...savedSessions.filter(s => s.name !== sessionName), session];
+    setSavedSessions(newSessions);
+    localStorage.setItem('research_sessions', JSON.stringify(newSessions));
+    alert('Session saved!');
+  };
+
+  const loadSession = (session: SavedSession) => {
+    setNodes(session.nodes.map(n => ({
+        ...n,
+        data: { ...n.data, onResearch: handleInNodeResearch } // Re-attach handler
+    })));
+    setEdges(session.edges);
+    setSessionName(session.name);
+    setShowLoadMenu(false);
+  };
 
   const updateGraph = (newResults: any[], parentId: string) => {
       if (!newResults) return;
@@ -150,6 +200,18 @@ export default function ResearchFlow() {
 
     setPromptState(prev => ({ ...prev, isOpen: false }));
     setIsLoading(true);
+
+    // Generate session name if not exists
+    if (!sessionName) {
+        fetch('/api/session-name', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ prompt }),
+        })
+        .then(res => res.json())
+        .then(data => setSessionName(data.name))
+        .catch(e => console.error('Error generating name:', e));
+    }
     
     // Set start node loading
     setNodes(nds => nds.map(n => 
@@ -233,18 +295,63 @@ export default function ResearchFlow() {
         newStartNode.position = { x: nodes.length * 50, y: nodes.length * 50 };
     }
     setNodes((nds) => [...nds, newStartNode]);
+    setSessionName(null); // Reset session name for new "main" research or keep it? 
+    // If it's a new node in same graph, keep session. If "New Research" clears graph, then reset.
+    // The current implementation just adds a node. Let's assume it adds to current session.
   };
 
   return (
     <div className="w-full h-screen bg-stone-50 relative">
-      <div className="absolute top-4 left-4 z-10">
+      <div className="absolute top-4 left-4 z-10 flex items-center gap-2">
         <button
             onClick={handleNewResearch}
             className="bg-white p-2 rounded-lg shadow-md border border-stone-200 hover:bg-stone-50 text-stone-600 transition-colors flex items-center gap-2"
+            title="Add new start node"
         >
             <Plus className="w-4 h-4" />
-            <span className="text-sm font-medium">New Research</span>
         </button>
+
+        <button
+            onClick={saveSession}
+            disabled={!sessionName}
+            className={`bg-white p-2 rounded-lg shadow-md border border-stone-200 transition-colors flex items-center gap-2 ${!sessionName ? 'opacity-50 cursor-not-allowed' : 'hover:bg-stone-50 text-stone-600'}`}
+            title="Save Session"
+        >
+            <Save className="w-4 h-4" />
+            {sessionName && <span className="text-sm font-medium max-w-[150px] truncate">{sessionName}</span>}
+        </button>
+
+        <div className="relative">
+            <button
+                onClick={() => setShowLoadMenu(!showLoadMenu)}
+                className="bg-white p-2 rounded-lg shadow-md border border-stone-200 hover:bg-stone-50 text-stone-600 transition-colors flex items-center gap-2"
+                title="Load Session"
+            >
+                <FolderOpen className="w-4 h-4" />
+                <ChevronDown className="w-3 h-3" />
+            </button>
+            
+            {showLoadMenu && (
+                <div className="absolute top-full left-0 mt-2 w-64 bg-white rounded-lg shadow-lg border border-stone-200 py-2 max-h-64 overflow-y-auto">
+                    {savedSessions.length === 0 ? (
+                        <div className="px-4 py-2 text-sm text-stone-400">No saved sessions</div>
+                    ) : (
+                        savedSessions.map(session => (
+                            <button
+                                key={session.id}
+                                onClick={() => loadSession(session)}
+                                className="w-full text-left px-4 py-2 text-sm text-stone-600 hover:bg-stone-50 flex items-center justify-between group"
+                            >
+                                <span className="truncate">{session.name}</span>
+                                <span className="text-xs text-stone-400 group-hover:text-stone-500">
+                                    {new Date(session.timestamp).toLocaleDateString()}
+                                </span>
+                            </button>
+                        ))
+                    )}
+                </div>
+            )}
+        </div>
       </div>
       <ReactFlow
         nodes={nodes}

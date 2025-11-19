@@ -102,7 +102,7 @@ function getMockVideos() {
 
 export async function POST(req: Request) {
   try {
-    const { action, query, video } = await req.json();
+    const { action, query, video, likedHooks } = await req.json();
 
     if (action === 'fetch_trends') {
       const videos = await fetchYouTubeTrends(query);
@@ -114,33 +114,54 @@ export async function POST(req: Request) {
         return new Response(JSON.stringify({ error: 'Video data required' }), { status: 400 });
       }
 
-      const { object: result } = await generateObject({
-        model: google('models/gemini-3-pro-preview'),
-        schema: z.object({
-          hooks: z.array(z.object({
-            id: z.string(),
-            title: z.string(),
-            hook: z.string().describe('The opening line or visual hook'),
-            thumbnailConcept: z.string().describe('A visual description of the thumbnail'),
-          })),
-        }),
-        prompt: `
-          Analyze this popular video and generate 3 new, viral hook/title/thumbnail concepts inspired by it, but for a similar niche.
-          
-          Source Video:
-          Title: ${video.title}
-          Channel: ${video.channelTitle}
-          Views: ${video.viewCount}
-          
-          Generate 3 variations that capture the same psychological appeal but with a fresh twist.
-          Make them catchy, click-worthy, but not misleading.
-        `,
+      // If likedHooks provided, influence the generation
+      const contextPrompt = likedHooks && likedHooks.length > 0 
+        ? `The user liked these previously generated hooks: 
+           ${JSON.stringify(likedHooks.map((h: any) => h.title))}
+           Generate similar but unique variations.`
+        : 'Generate 1 unique hook concept.';
+
+      // Generate 3 hooks in parallel
+      const promises = Array(3).fill(null).map(async () => {
+        const { object: result } = await generateObject({
+            model: google('models/gemini-3-pro-preview'),
+            schema: z.object({
+              title: z.string(),
+              hook: z.string().describe('The opening line or visual hook'),
+              thumbnailConcept: z.string().describe('A visual description of the thumbnail'),
+            }),
+            prompt: `
+            Analyze this popular video and generate a viral hook/title/thumbnail concept inspired by it, but for a similar niche.
+            
+            Source Video:
+            Title: ${video.title}
+            Channel: ${video.channelTitle}
+            Views: ${video.viewCount}
+            
+            ${contextPrompt}
+
+            Make it catchy, click-worthy, but not misleading.
+            `,
+        });
+        return result;
       });
 
-      // Add IDs to the hooks
-      const hooksWithIds = result.hooks.map((h, i) => ({ ...h, id: `gen-${Date.now()}-${i}` }));
+      const results = await Promise.all(promises);
+      const hooksWithIds = results.map((h, i) => ({ ...h, id: `gen-${Date.now()}-${i}` }));
 
       return new Response(JSON.stringify({ hooks: hooksWithIds }), { headers: { 'Content-Type': 'application/json' } });
+    }
+    
+    if (action === 'generate_thumbnail_image') {
+        const { concept } = await req.json();
+        // Placeholder for actual image generation logic with Gemini Flash or similar
+        // In a real app, this would call an image generation API
+        
+        // For now, returning a mock or indicating success for the UI to handle
+        // Since we don't have a direct image gen tool configured here yet, we'll return a dummy URL or instructions
+        return new Response(JSON.stringify({ 
+            imageUrl: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=2564&auto=format&fit=crop' // Placeholder
+        }), { headers: { 'Content-Type': 'application/json' } });
     }
 
     return new Response(JSON.stringify({ error: 'Invalid action' }), { status: 400 });
@@ -150,4 +171,3 @@ export async function POST(req: Request) {
     return new Response(JSON.stringify({ error: 'Internal Server Error' }), { status: 500 });
   }
 }
-

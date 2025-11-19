@@ -38,7 +38,7 @@ async function getScrapedData(url: string): Promise<{ ogImage: string | null, im
 
 export async function POST(req: Request) {
   try {
-    const { prompt, parentNodeId } = await req.json();
+    const { prompt, parentNodeId, parentContext } = await req.json();
 
     if (!prompt) {
       return new Response(JSON.stringify({ error: 'Prompt is required' }), { status: 400 });
@@ -55,7 +55,9 @@ export async function POST(req: Request) {
       }),
       prompt: `You are an expert video researcher. 
       ${isDeepDive 
-        ? `The user wants to deep dive into a specific aspect: "${prompt}". Find detailed info and visual assets.` 
+        ? `The user wants to deep dive into a specific aspect: "${prompt}". 
+           Context from parent node: "${parentContext?.title || ''}: ${parentContext?.content || ''}".
+           Find detailed info and visual assets related to this specific context.` 
         : `The user wants to make a video about: "${prompt}". Generate a research plan.`}
       
       Generate 2-3 specific, high-quality search queries.`,
@@ -99,7 +101,7 @@ export async function POST(req: Request) {
                 imageUrl: z.string().optional(),
                 type: z.enum(['finding', 'asset']).describe('Use "asset" if the result contains multiple good images/videos, otherwise "finding".'),
                 assets: z.array(z.string()).optional().describe('List of image URLs if type is asset'),
-                suggestedQuestion: z.string().describe('A thought-provoking question to prompt further research on this specific node.'),
+                suggestedQuestion: z.string().describe('A fascinating FACT about this finding that explains why it is interesting. Do NOT phrase it as a question.'),
                 suggestedPaths: z.array(z.string()).describe('3 distinct, interesting directions to take the research from here.'),
             })),
         }),
@@ -108,6 +110,7 @@ export async function POST(req: Request) {
             
             Context: ${isDeepDive ? 'Deep dive research' : 'Initial broad research'}
             Topic: "${prompt}"
+            ${isDeepDive ? `Parent Context: ${parentContext?.title} - ${parentContext?.content}` : ''}
 
             Raw Results:
             ${JSON.stringify(resultsWithImages.map(r => ({
@@ -122,7 +125,8 @@ export async function POST(req: Request) {
             1. Generate exactly ${isDeepDive ? '4-5' : '4-5'} nodes.
             2. ${isDeepDive ? 'At least one node MUST be an "asset" type node containing multiple images from the source.' : 'Focus on interesting facts and angles.'}
             3. For "asset" nodes, populate the 'assets' array with the provided image URLs.
-            4. For every node, provide a 'suggestedQuestion' and 3 'suggestedPaths' for the user to click.
+            4. For every node, provide a 'suggestedQuestion' which MUST be a FACT statement, not a question.
+            5. Provide 3 'suggestedPaths' for the user to click.
         `,
     });
 

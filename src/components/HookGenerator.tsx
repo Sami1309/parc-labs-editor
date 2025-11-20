@@ -155,7 +155,8 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [stackName, setStackName] = useState('');
   const [showSavedStacks, setShowSavedStacks] = useState(false);
-
+  const [isInitialized, setIsInitialized] = useState(false);
+  
   const containerRef = useRef<HTMLDivElement>(null);
 
   // --- Persistence ---
@@ -174,6 +175,8 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
             }
         } catch (e) {
             console.error("Failed to load from DB", e);
+        } finally {
+            setIsInitialized(true);
         }
     };
     loadState();
@@ -181,6 +184,7 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
 
   // Save to IndexedDB whenever state changes
   useEffect(() => {
+      if (!isInitialized) return;
       if (savedHooks.length > 0) {
           saveToDB(STORE_NAME, savedHooks).catch(console.error);
       } else {
@@ -188,20 +192,22 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
            // Just calling it is fine.
            saveToDB(STORE_NAME, []);
       }
-  }, [savedHooks]);
+  }, [savedHooks, isInitialized]);
 
   useEffect(() => {
+      if (!isInitialized) return;
       if (savedContextStacks.length > 0) {
           saveToDB(STACK_STORE_NAME, savedContextStacks).catch(console.error);
       } else {
           saveToDB(STACK_STORE_NAME, []);
       }
-  }, [savedContextStacks]);
+  }, [savedContextStacks, isInitialized]);
 
   // Keep current context stack in localStorage (usually small)
   useEffect(() => {
+      if (!isInitialized) return;
       localStorage.setItem('currentContextStack', JSON.stringify(contextStack));
-  }, [contextStack]);
+  }, [contextStack, isInitialized]);
 
   // Auto-generate stack name
   useEffect(() => {

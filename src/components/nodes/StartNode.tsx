@@ -6,16 +6,18 @@ const StartNode = ({ data, isConnectable }: any) => {
   return (
     <div className={`px-4 py-3 shadow-md rounded-lg bg-white border-2 ${data.isLoading ? 'border-blue-500 ring-2 ring-blue-100' : 'border-stone-400'} w-64 cursor-pointer hover:border-blue-500 hover:shadow-lg transition-all group`}>
       <div className="flex items-center">
-        <div className={`rounded-full p-2 mr-3 transition-colors flex-shrink-0 ${data.isLoading ? 'bg-blue-100' : 'bg-stone-100 group-hover:bg-blue-50'}`}>
+        <div className={`rounded-full mr-3 transition-colors flex-shrink-0 ${data.isLoading ? 'bg-blue-100 p-2' : (data.imageUrl ? 'p-0 overflow-hidden' : 'bg-stone-100 group-hover:bg-blue-50 p-2')}`}>
             {data.isLoading ? (
                 <Loader2 className="w-5 h-5 text-blue-600 animate-spin" />
+            ) : data.imageUrl ? (
+                <img src={data.imageUrl} alt="" className="w-10 h-10 object-cover" />
             ) : (
                 <Sparkles className="w-5 h-5 text-stone-600 group-hover:text-blue-500" />
             )}
         </div>
         <div className="flex-1 min-w-0">
             <div className="text-sm font-bold text-stone-800 group-hover:text-stone-900 whitespace-normal break-words leading-tight">
-                {data.isLoading ? 'Researching...' : 'Start Research'}
+                {data.isLoading ? 'Researching...' : (data.label || 'Start Research')}
             </div>
             {data.isLoading && data.loadingText && (
                 <div className="text-xs text-blue-600 animate-pulse mt-1 whitespace-normal break-words leading-tight">

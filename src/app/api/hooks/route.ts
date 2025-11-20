@@ -377,8 +377,6 @@ export async function POST(req: Request) {
     }
 
     if (action === 'analyze_hook') {
-         const { title, hook } = await req.json();
-
          const stream = new ReadableStream({
              async start(controller) {
                  try {

@@ -154,6 +154,8 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
   const [savedContextStacks, setSavedContextStacks] = useState<ContextStack[]>([]);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [stackName, setStackName] = useState('');
+  const [isStackNameEditing, setIsStackNameEditing] = useState(false);
+  const [isGeneratingName, setIsGeneratingName] = useState(false);
   const [showSavedStacks, setShowSavedStacks] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
   
@@ -217,6 +219,7 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
   }, [contextStack.length]);
 
   const generateStackName = async (videos: TrendingVideo[]) => {
+      setIsGeneratingName(true);
       try {
           const res = await fetch('/api/hooks', {
               method: 'POST',
@@ -230,6 +233,8 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
           if (data.name) setStackName(data.name);
       } catch (e) {
           console.error("Failed to generate stack name", e);
+      } finally {
+          setIsGeneratingName(false);
       }
   };
 
@@ -420,7 +425,7 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
       }
   };
 
-  const generateThumbnailImage = async (id: string, concept: string) => {
+  const generateThumbnailImage = async (id: string, concept: string, append: boolean = false) => {
       const setGenerating = (isGen: boolean) => {
         setGeneratedHooks(prev => prev.map(h => h.id === id ? { ...h, isGeneratingImage: isGen } : h));
         setSavedHooks(prev => prev.map(h => h.id === id ? { ...h, isGeneratingImage: isGen } : h));
@@ -436,9 +441,21 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
           });
           const data = await res.json();
           if (data.images) {
-            const update = { generatedImages: data.images, selectedImageIndex: 0, isGeneratingImage: false };
-            setGeneratedHooks(prev => prev.map(h => h.id === id ? { ...h, ...update } : h));
-            setSavedHooks(prev => prev.map(h => h.id === id ? { ...h, ...update } : h));
+            const applyUpdate = (hook: HookIdea) => {
+                const currentImages = hook.generatedImages || [];
+                const newImages = append ? [...currentImages, ...data.images] : data.images;
+                // If appending, select the first of the *new* images. If replacing, select 0.
+                const newIndex = append ? currentImages.length : 0;
+                return { 
+                    ...hook, 
+                    generatedImages: newImages, 
+                    selectedImageIndex: newIndex, 
+                    isGeneratingImage: false 
+                };
+            };
+
+            setGeneratedHooks(prev => prev.map(h => h.id === id ? applyUpdate(h) : h));
+            setSavedHooks(prev => prev.map(h => h.id === id ? applyUpdate(h) : h));
           }
       } catch (e) {
           console.error(e);
@@ -723,21 +740,21 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
                                                     inStack ? "border-green-500 ring-2 ring-green-500 ring-offset-1" : "border-white"
                                                 )}>
                                                     <img src={video.thumbnail} className="w-full h-full object-cover" />
-                                                    
-                                                    {/* Hover Overlay with Plus Button (Fixed Position) */}
-                                                    <div className="absolute top-0 right-0 p-1 opacity-0 group-hover:opacity-100 transition-opacity z-20">
-                                                        <Button 
-                                                            size="icon" 
-                                                            className={cn("rounded-full h-6 w-6 shadow-md border border-black/10", inStack ? "bg-red-500 hover:bg-red-600 text-white" : "bg-white text-black hover:bg-stone-100")}
-                                                            onClick={(e) => {
-                                                                e.stopPropagation();
-                                                                if (inStack) removeFromContextStack(video.id);
-                                                                else addToContextStack(video);
-                                                            }}
-                                                        >
-                                                            {inStack ? <Minus size={14} /> : <Plus size={14} />}
-                                                        </Button>
-                                                        </div>
+                                                </div>
+
+                                                {/* Hover Overlay with Plus Button (Fixed Position Outside Container) */}
+                                                <div className="absolute -top-3 -right-3 p-1 opacity-0 group-hover:opacity-100 transition-opacity z-20">
+                                                    <Button 
+                                                        size="icon" 
+                                                        className={cn("rounded-full h-6 w-6 shadow-md border border-black/10", inStack ? "bg-red-500 hover:bg-red-600 text-white" : "bg-white text-black hover:bg-stone-100")}
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            if (inStack) removeFromContextStack(video.id);
+                                                            else addToContextStack(video);
+                                                        }}
+                                                    >
+                                                        {inStack ? <Minus size={14} /> : <Plus size={14} />}
+                                                    </Button>
                                                 </div>
                                                 
                                                 {/* Tooltip */}
@@ -859,18 +876,50 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
                                  {savedHooks.map(hook => (
                                      <div key={hook.id} className="bg-white p-4 rounded-xl border border-stone-200 flex gap-4 items-start shadow-sm">
                                          <div className="w-48 flex-shrink-0 space-y-2">
-                                             {hook.generatedImages && hook.generatedImages.length > 0 ? (
-                                                 <img src={hook.generatedImages[hook.selectedImageIndex || 0]} className="w-full aspect-video object-cover rounded-lg shadow-sm" />
-                                             ) : (
-                                                 <div className="w-full aspect-video bg-stone-100 rounded-lg flex items-center justify-center text-stone-400">
-                                                     <ImageIcon size={20} />
-                                                 </div>
-                                             )}
-                                             <Button variant="outline" size="sm" className="w-full text-stone-700" onClick={() => generateThumbnailImage(hook.id, hook.thumbnailConcept)} disabled={hook.isGeneratingImage}>
-                                                 {hook.isGeneratingImage ? <Loader2 className="animate-spin mr-2" size={12}/> : <RefreshCw size={12} className="mr-2"/>}
-                                                 {hook.generatedImages ? "Regenerate" : "Generate"}
-                    </Button>
-                </div>
+                                            {hook.generatedImages && hook.generatedImages.length > 0 ? (
+                                                <div className="space-y-2">
+                                                    <img src={hook.generatedImages[hook.selectedImageIndex || 0]} className="w-full aspect-video object-cover rounded-lg shadow-sm" />
+                                                    
+                                                    {hook.generatedImages.length > 1 && (
+                                                        <div className="flex gap-1 overflow-x-auto pb-1 scrollbar-hide">
+                                                            {hook.generatedImages.map((img, idx) => (
+                                                                <button 
+                                                                    key={idx} 
+                                                                    onClick={() => selectImage(hook.id, idx)} 
+                                                                    className={cn(
+                                                                        "w-12 h-8 rounded overflow-hidden border flex-shrink-0 transition-all", 
+                                                                        (hook.selectedImageIndex || 0) === idx ? "border-purple-500 ring-2 ring-purple-200" : "border-transparent opacity-70 hover:opacity-100"
+                                                                    )}
+                                                                >
+                                                                    <img src={img} className="w-full h-full object-cover" />
+                                                                </button>
+                                                            ))}
+                                                        </div>
+                                                    )}
+
+                                                    <div className="flex gap-1">
+                                                        <Button variant="outline" size="sm" className="flex-1 text-stone-700 text-xs px-2" onClick={() => generateThumbnailImage(hook.id, hook.thumbnailConcept)} disabled={hook.isGeneratingImage}>
+                                                            {hook.isGeneratingImage ? <Loader2 className="animate-spin mr-2" size={12}/> : <RefreshCw size={12} className="mr-2"/>}
+                                                            Regenerate
+                                                        </Button>
+                                                        <Button variant="outline" size="sm" className="flex-1 text-stone-700 text-xs px-2" onClick={() => generateThumbnailImage(hook.id, hook.thumbnailConcept, true)} disabled={hook.isGeneratingImage}>
+                                                            {hook.isGeneratingImage ? <Loader2 className="animate-spin mr-2" size={12}/> : <Plus size={12} className="mr-2"/>}
+                                                            Add More
+                                                        </Button>
+                                                    </div>
+                                                </div>
+                                            ) : (
+                                                <div className="space-y-2">
+                                                    <div className="w-full aspect-video bg-stone-100 rounded-lg flex items-center justify-center text-stone-400">
+                                                        <ImageIcon size={20} />
+                                                    </div>
+                                                    <Button variant="outline" size="sm" className="w-full text-stone-700" onClick={() => generateThumbnailImage(hook.id, hook.thumbnailConcept)} disabled={hook.isGeneratingImage}>
+                                                        {hook.isGeneratingImage ? <Loader2 className="animate-spin mr-2" size={12}/> : <RefreshCw size={12} className="mr-2"/>}
+                                                        Generate
+                                                    </Button>
+                                                </div>
+                                            )}
+                                        </div>
                                          <div className="flex-1 min-w-0">
                                              <div className="flex justify-between">
                                                  <Input 
@@ -885,8 +934,20 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
                                              <p className="text-stone-700 text-sm mb-3 leading-relaxed">{hook.hook}</p>
                                              
                                              {hook.analysis ? (
-                                                 <div className="bg-indigo-50 p-3 rounded text-sm text-indigo-900 border border-indigo-100">
-                                                     <div className="font-bold flex justify-between mb-1">AI Score: {hook.analysis.score}/10</div>
+                                                 <div className="bg-indigo-50 p-3 rounded text-sm text-indigo-900 border border-indigo-100 relative group/analysis">
+                                                     <div className="font-bold flex justify-between mb-1">
+                                                         <span>AI Score: {hook.analysis.score}/10</span>
+                                                         <Button 
+                                                             variant="ghost" 
+                                                             size="icon" 
+                                                             className="h-5 w-5 text-indigo-400 hover:text-indigo-700 hover:bg-indigo-100"
+                                                             onClick={() => analyzeHook(hook)}
+                                                             title="Regenerate Analysis"
+                                                             disabled={hook.isAnalyzing}
+                                                         >
+                                                             {hook.isAnalyzing ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+                                                         </Button>
+                                                     </div>
                                                      {hook.analysis.feedback}
                                                  </div>
                                              ) : (
@@ -965,14 +1026,39 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
                       </div>
                         ) : (
                             <>
-                                <div className="flex gap-2 mb-4">
-                                    <Input 
-                                        placeholder="Stack name..." 
-                                        value={stackName} 
-                                        onChange={(e) => setStackName(e.target.value)}
-                                        className="h-8 text-sm text-stone-900"
-                                    />
-                                    <Button size="sm" variant="outline" onClick={saveContextStack} disabled={!stackName} className="text-stone-700">Save</Button>
+                                <div className="flex gap-2 mb-4 items-center relative">
+                                    {isGeneratingName && (
+                                        <div className="absolute right-16 top-1/2 -translate-y-1/2 z-10">
+                                            <Loader2 size={14} className="animate-spin text-stone-400" />
+                                        </div>
+                                    )}
+                                    
+                                    {isStackNameEditing ? (
+                                        <Input 
+                                            placeholder="Stack name..." 
+                                            value={stackName} 
+                                            onChange={(e) => setStackName(e.target.value)}
+                                            onBlur={() => setIsStackNameEditing(false)}
+                                            onKeyDown={(e) => {
+                                                if (e.key === 'Enter') setIsStackNameEditing(false);
+                                            }}
+                                            autoFocus
+                                            className="h-8 text-sm text-stone-900 font-bold"
+                                        />
+                                    ) : (
+                                        <div 
+                                            onDoubleClick={() => setIsStackNameEditing(true)}
+                                            className={cn(
+                                                "h-8 text-sm flex items-center px-3 border border-transparent rounded flex-1 truncate cursor-text select-none font-semibold text-stone-900",
+                                                !stackName && "text-stone-400 italic font-normal"
+                                            )}
+                                            title="Double click to edit"
+                                        >
+                                            {stackName || "Generating Name..."}
+                                        </div>
+                                    )}
+                                    
+                                    <Button size="sm" variant="outline" onClick={saveContextStack} disabled={!stackName} className="text-stone-700 flex-shrink-0">Save</Button>
                       </div>
                                 
                                 <div className="space-y-3">

@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Sparkles, RefreshCw, Play, Search, ThumbsUp, Loader2, Check, X, Image as ImageIcon, ArrowLeft, Plus, BarChart2, TrendingUp, Activity, Eye, Heart, Users, Calendar, Clock, Settings2, ListPlus, Trash2 } from 'lucide-react';
+import { Sparkles, RefreshCw, Play, Search, ThumbsUp, Loader2, Check, X, Image as ImageIcon, ArrowLeft, Plus, BarChart2, TrendingUp, Activity, Eye, Heart, Users, Calendar, Clock, Settings2, ListPlus, Trash2, Save, FolderOpen, PanelRightOpen, PanelRightClose, Minus, ChevronRight, ChevronLeft } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card } from '@/components/ui/card';
@@ -30,11 +30,19 @@ interface HookIdea {
   generatedImages?: string[];
   selectedImageIndex?: number;
   isGeneratingImage?: boolean;
+  isAnalyzing?: boolean;
   analysis?: {
       score: number;
       feedback: string;
       improvementSuggestion: string;
   };
+}
+
+interface ContextStack {
+    id: string;
+    name: string;
+    videos: TrendingVideo[];
+    date: string;
 }
 
 interface HookGeneratorProps {
@@ -57,15 +65,82 @@ const AXIS_OPTIONS = [
     { label: 'Subscribers', value: 'subscriberCount' },
 ];
 
+// Helper for IndexedDB
+const DB_NAME = 'HookGenDB';
+const STORE_NAME = 'savedHooks';
+const STACK_STORE_NAME = 'savedStacks';
+const DB_VERSION = 2;
+
+const openDB = () => {
+    return new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open(DB_NAME, DB_VERSION);
+        
+        request.onupgradeneeded = (event) => {
+            const db = (event.target as IDBOpenDBRequest).result;
+            if (!db.objectStoreNames.contains(STORE_NAME)) {
+                db.createObjectStore(STORE_NAME, { keyPath: 'id' });
+            }
+            if (!db.objectStoreNames.contains(STACK_STORE_NAME)) {
+                db.createObjectStore(STACK_STORE_NAME, { keyPath: 'id' });
+            }
+        };
+        
+        request.onsuccess = (event) => resolve((event.target as IDBOpenDBRequest).result);
+        request.onerror = (event) => reject((event.target as IDBOpenDBRequest).error);
+    });
+};
+
+const saveToDB = async (storeName: string, items: any[]) => {
+    const db = await openDB();
+    const transaction = db.transaction(storeName, 'readwrite');
+    const store = transaction.objectStore(storeName);
+    
+    // Simple approach: Clear and rewrite or put individually. 
+    // Since we maintain full state in React, clear/rewrite is safer for sync.
+    // But for efficiency we should probably use put.
+    // For now, to prevent accumulating deleted items, we'll clear first if it's a full sync.
+    // But actually, `items` passed here IS the full state.
+    
+    await new Promise<void>((resolve, reject) => {
+         const clearReq = store.clear();
+         clearReq.onsuccess = () => {
+             let count = 0;
+             if (items.length === 0) resolve();
+             items.forEach(item => {
+                 const req = store.put(item);
+                 req.onsuccess = () => {
+                     count++;
+                     if (count === items.length) resolve();
+                 };
+                 req.onerror = () => reject(req.error);
+             });
+         };
+         clearReq.onerror = () => reject(clearReq.error);
+    });
+};
+
+const loadFromDB = async (storeName: string) => {
+    const db = await openDB();
+    return new Promise<any[]>((resolve, reject) => {
+        const transaction = db.transaction(storeName, 'readonly');
+        const store = transaction.objectStore(storeName);
+        const request = store.getAll();
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+    });
+};
+
+
 export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
   const [activeTab, setActiveTab] = useState<'trends' | 'outliers' | 'studio'>('trends');
+  const [studioTab, setStudioTab] = useState<'generate' | 'saved'>('generate');
   const [isLoading, setIsLoading] = useState(false);
   const [videos, setVideos] = useState<TrendingVideo[]>([]);
   const [nextPageToken, setNextPageToken] = useState<string | null>(null);
   const [selectedVideo, setSelectedVideo] = useState<TrendingVideo | null>(null);
   const [previewVideo, setPreviewVideo] = useState<TrendingVideo | null>(null); 
   const [generatedHooks, setGeneratedHooks] = useState<HookIdea[]>([]);
-  const [savedHooks, setSavedHooks] = useState<HookIdea[]>([]); // Saved Hooks
+  const [savedHooks, setSavedHooks] = useState<HookIdea[]>([]); 
   const [searchQuery, setSearchQuery] = useState('');
   const [filter, setFilter] = useState<string>('');
   const [recency, setRecency] = useState<string>('');
@@ -74,11 +149,83 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
   const [xAxis, setXAxis] = useState<string>('outlierScore');
   const [yAxis, setYAxis] = useState<string>('viewCount');
 
-  // Select Mode
-  const [isSelectMode, setIsSelectMode] = useState(false);
-  const [selectedVideos, setSelectedVideos] = useState<TrendingVideo[]>([]);
+  // Context Stack (Sidebar)
+  const [contextStack, setContextStack] = useState<TrendingVideo[]>([]);
+  const [savedContextStacks, setSavedContextStacks] = useState<ContextStack[]>([]);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [stackName, setStackName] = useState('');
+  const [showSavedStacks, setShowSavedStacks] = useState(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // --- Persistence ---
+  useEffect(() => {
+    const loadState = async () => {
+        try {
+            const loadedHooks = await loadFromDB(STORE_NAME);
+            if (loadedHooks) setSavedHooks(loadedHooks);
+            
+            const loadedStacks = await loadFromDB(STACK_STORE_NAME);
+            if (loadedStacks) setSavedContextStacks(loadedStacks);
+
+            const currentStackData = localStorage.getItem('currentContextStack');
+            if (currentStackData) {
+                setContextStack(JSON.parse(currentStackData));
+            }
+        } catch (e) {
+            console.error("Failed to load from DB", e);
+        }
+    };
+    loadState();
+  }, []);
+
+  // Save to IndexedDB whenever state changes
+  useEffect(() => {
+      if (savedHooks.length > 0) {
+          saveToDB(STORE_NAME, savedHooks).catch(console.error);
+      } else {
+           // If empty, clear DB? saveToDB handles clear if passed empty array.
+           // Just calling it is fine.
+           saveToDB(STORE_NAME, []);
+      }
+  }, [savedHooks]);
+
+  useEffect(() => {
+      if (savedContextStacks.length > 0) {
+          saveToDB(STACK_STORE_NAME, savedContextStacks).catch(console.error);
+      } else {
+          saveToDB(STACK_STORE_NAME, []);
+      }
+  }, [savedContextStacks]);
+
+  // Keep current context stack in localStorage (usually small)
+  useEffect(() => {
+      localStorage.setItem('currentContextStack', JSON.stringify(contextStack));
+  }, [contextStack]);
+
+  // Auto-generate stack name
+  useEffect(() => {
+      if (contextStack.length > 0 && !stackName) {
+          generateStackName(contextStack);
+      }
+  }, [contextStack.length]);
+
+  const generateStackName = async (videos: TrendingVideo[]) => {
+      try {
+          const res = await fetch('/api/hooks', {
+              method: 'POST',
+              body: JSON.stringify({ 
+                  action: 'generate_stack_name', 
+                  videoTitles: videos.slice(0, 5).map(v => v.title) 
+              }),
+              headers: { 'Content-Type': 'application/json' }
+          });
+          const data = await res.json();
+          if (data.name) setStackName(data.name);
+      } catch (e) {
+          console.error("Failed to generate stack name", e);
+      }
+  };
 
   const getPublishedAfterDate = (period: string) => {
       if (!period) return undefined;
@@ -119,32 +266,35 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
   };
 
   useEffect(() => {
-      if (videos.length > 0 || searchQuery) {
+      if ((videos.length > 0 || searchQuery) && activeTab !== 'studio') {
           fetchTrends(null, true);
       }
-  }, [recency]);
+  }, [recency, activeTab]); 
 
   const generateHooks = async (video?: TrendingVideo, useLiked = false, batchVideos?: TrendingVideo[]) => {
     setIsLoading(true);
     
-    // Batch Mode
-    if (batchVideos) {
-        if (batchVideos.length > 0) {
-             setSelectedVideo(batchVideos[0]); // Focus on first
-        }
-    } else if (video && !useLiked) {
-        setSelectedVideo(video);
+    const targetVideos = batchVideos || (video ? [video] : (selectedVideo ? [selectedVideo] : contextStack));
+    
+    if (targetVideos.length === 0) {
+        setIsLoading(false);
+        return;
     }
 
-    setPreviewVideo(null);
+    setActiveTab('studio');
+    setStudioTab('generate');
     
-    const targetVideo = video || (batchVideos ? batchVideos[0] : selectedVideo);
-    if (!targetVideo) { setIsLoading(false); return; }
+    if (!useLiked) {
+        setGeneratedHooks([]);
+    }
+
+    const targetVideo = targetVideos[0];
+    setSelectedVideo(targetVideo);
 
     const likedHooks = useLiked ? generatedHooks.filter(h => h.liked) : [];
     
     try {
-      const res = await fetch('/api/hooks', {
+      const response = await fetch('/api/hooks', {
         method: 'POST',
         body: JSON.stringify({ 
           action: 'generate_hooks', 
@@ -153,14 +303,35 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
         }),
         headers: { 'Content-Type': 'application/json' }
       });
-      const data = await res.json();
-      if (data.hooks) {
-        if (useLiked) {
-            setGeneratedHooks(prev => [...prev.filter(h => h.liked), ...data.hooks]);
-        } else {
-            setGeneratedHooks(data.hooks);
-        }
+
+      if (!response.body) return;
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+
+      while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          
+          const chunk = decoder.decode(value, { stream: true });
+          const lines = chunk.split('\n\n');
+          
+          for (const line of lines) {
+              if (line.startsWith('data: ')) {
+                  try {
+                      const data = JSON.parse(line.slice(6));
+                      if (data.type === 'hook') {
+                          setGeneratedHooks(prev => [...prev, data.hook]);
+                      } else if (data.type === 'done') {
+                          setIsLoading(false);
+                      }
+                  } catch (e) {
+                      console.error("Error parsing stream data", e);
+                  }
+              }
+          }
       }
+
     } catch (error) {
       console.error('Failed to generate hooks:', error);
     } finally {
@@ -193,13 +364,14 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
   };
 
   const analyzeHook = async (hook: HookIdea) => {
-      // Find if it's in generated or saved list to update loading state
+      // Optimistic update or local loading state for specific hook could be added here
+      // For now we use a loading text placeholder
       const updateHook = (id: string, updates: Partial<HookIdea>) => {
           setSavedHooks(prev => prev.map(h => h.id === id ? { ...h, ...updates } : h));
           setGeneratedHooks(prev => prev.map(h => h.id === id ? { ...h, ...updates } : h));
       };
       
-      // Add loading state if I had one for analysis... using isGeneratingImage for now or ignore
+      updateHook(hook.id, { isAnalyzing: true });
       
       try {
           const res = await fetch('/api/hooks', {
@@ -207,15 +379,42 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
             body: JSON.stringify({ action: 'analyze_hook', title: hook.title, hook: hook.hook }),
             headers: { 'Content-Type': 'application/json' }
           });
-          const data = await res.json();
-          updateHook(hook.id, { analysis: data });
+          
+          if (!res.body) return;
+          const reader = res.body.getReader();
+          const decoder = new TextDecoder();
+          let fullText = '';
+
+          while (true) {
+              const { value, done } = await reader.read();
+              if (done) break;
+              const chunk = decoder.decode(value, { stream: true });
+              fullText += chunk;
+              // If we want to stream raw text we could, but we are parsing JSON at the end
+              // For true streaming text we'd need to handle partial JSON or just stream text.
+              // The prompt asks for JSON, but maybe better to just stream text for immediate feedback?
+              // Let's try to parse partially or just show "Analyzing..."
+          }
+          
+          // Attempt to find JSON in the text
+          try {
+              // Simple extraction if model returns markdown code block
+              const jsonMatch = fullText.match(/\{[\s\S]*\}/);
+              const jsonStr = jsonMatch ? jsonMatch[0] : fullText;
+              const analysis = JSON.parse(jsonStr);
+              updateHook(hook.id, { analysis, isAnalyzing: false });
+          } catch (e) {
+              // Fallback if not valid JSON yet (maybe raw text response)
+             updateHook(hook.id, { isAnalyzing: false }); 
+          }
+
       } catch (e) {
           console.error(e);
+          updateHook(hook.id, { isAnalyzing: false });
       }
   };
 
   const generateThumbnailImage = async (id: string, concept: string) => {
-      // Update both lists just in case
       const setGenerating = (isGen: boolean) => {
         setGeneratedHooks(prev => prev.map(h => h.id === id ? { ...h, isGeneratingImage: isGen } : h));
         setSavedHooks(prev => prev.map(h => h.id === id ? { ...h, isGeneratingImage: isGen } : h));
@@ -257,18 +456,39 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
       }
   };
 
-  const clearSelection = () => {
-      setSelectedVideo(null);
-      setGeneratedHooks([]);
+  const addToContextStack = (video: TrendingVideo) => {
+      if (!contextStack.find(v => v.id === video.id)) {
+          setContextStack(prev => [...prev, video]);
+      }
+      if (!isSidebarOpen) setIsSidebarOpen(true);
   };
 
-  const toggleSelectVideo = (video: TrendingVideo) => {
-      if (selectedVideos.find(v => v.id === video.id)) {
-          setSelectedVideos(prev => prev.filter(v => v.id !== video.id));
-      } else {
-          setSelectedVideos(prev => [...prev, video]);
-      }
+  const removeFromContextStack = (videoId: string) => {
+      setContextStack(prev => prev.filter(v => v.id !== videoId));
   };
+
+  const saveContextStack = () => {
+      if (!stackName.trim()) return;
+      const newStack: ContextStack = {
+          id: Date.now().toString(),
+          name: stackName,
+          videos: contextStack,
+          date: new Date().toISOString()
+      };
+      setSavedContextStacks(prev => [...prev, newStack]);
+      setShowSavedStacks(true);
+  };
+
+  const loadContextStack = (stack: ContextStack) => {
+      setContextStack(stack.videos);
+      setStackName(stack.name);
+      setIsSidebarOpen(true);
+  };
+
+  const deleteSavedStack = (stackId: string) => {
+      setSavedContextStacks(prev => prev.filter(s => s.id !== stackId));
+  };
+
 
   const getViralityScore = (video: TrendingVideo) => {
       if (!video.viewCount || !video.subscriberCount) return null;
@@ -278,7 +498,6 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
       return (views / subs).toFixed(1) + 'x';
   };
 
-  // --- Outlier Graph Logic ---
   const getValue = (video: TrendingVideo, key: string) => {
       if (key === 'outlierScore') return video.outlierScore || 0;
       // @ts-ignore
@@ -303,317 +522,146 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
       return ((logVal - logMin) / range) * 100;
   };
 
-  // Derived maxViews for bubble sizing specifically (using viewCount regardless of axis)
   const maxViews = Math.max(...videos.map(v => parseInt(v.viewCount) || 0), 1);
 
   return (
     <div className="h-full flex flex-col bg-stone-50 overflow-hidden">
       {/* Header */}
-      <div className="p-6 border-b border-stone-200 bg-white space-y-4 z-20 relative shadow-sm">
-        {/* ... header code ... */}
+      <div className="p-4 border-b border-stone-200 bg-white space-y-4 z-20 relative shadow-sm flex-shrink-0">
         <div className="flex items-center justify-between">
             <div>
-                <h1 className="text-2xl font-bold text-stone-900 mb-1">Hook & Trend Generator</h1>
-                <p className="text-stone-600">Discover trending formats and generate viral hooks using AI.</p>
+                <h1 className="text-xl font-bold text-stone-900">Hook & Trend Generator</h1>
             </div>
-            {!selectedVideo && (
                 <div className="flex items-center gap-2">
-                    <button 
-                        onClick={() => setIsSelectMode(!isSelectMode)}
-                        className={cn("px-4 py-2 rounded-md text-sm font-medium transition-all border", isSelectMode ? "bg-stone-900 text-white border-stone-900" : "bg-white text-stone-700 border-stone-200 hover:bg-stone-50")}
-                    >
-                        <ListPlus className="inline-block mr-2 w-4 h-4" /> Select Mode
-                    </button>
                     <div className="flex bg-stone-100 p-1 rounded-lg">
                         <button 
-                            onClick={() => { setActiveTab('trends'); setVideos([]); fetchTrends(null, true); }}
-                            className={cn("px-4 py-2 rounded-md text-sm font-medium transition-all", activeTab === 'trends' ? "bg-white shadow text-stone-900" : "text-stone-500 hover:text-stone-900")}
+                        onClick={() => { setActiveTab('trends'); setSelectedVideo(null); }}
+                        className={cn("px-3 py-1.5 rounded-md text-sm font-medium transition-all", activeTab === 'trends' ? "bg-white shadow text-stone-900" : "text-stone-600 hover:text-stone-900")}
                         >
                             <TrendingUp className="inline-block mr-2 w-4 h-4" /> Feed
                         </button>
                         <button 
-                            onClick={() => { setActiveTab('outliers'); setVideos([]); fetchTrends(null, true); }}
-                            className={cn("px-4 py-2 rounded-md text-sm font-medium transition-all", activeTab === 'outliers' ? "bg-white shadow text-stone-900" : "text-stone-500 hover:text-stone-900")}
+                        onClick={() => { setActiveTab('outliers'); setSelectedVideo(null); }}
+                        className={cn("px-3 py-1.5 rounded-md text-sm font-medium transition-all", activeTab === 'outliers' ? "bg-white shadow text-stone-900" : "text-stone-600 hover:text-stone-900")}
                         >
                             <Activity className="inline-block mr-2 w-4 h-4" /> Outlier Analysis
                         </button>
                         <button 
-                            onClick={() => { setActiveTab('studio'); setSelectedVideo(null); }}
-                            className={cn("px-4 py-2 rounded-md text-sm font-medium transition-all", activeTab === 'studio' ? "bg-white shadow text-stone-900" : "text-stone-500 hover:text-stone-900")}
+                        onClick={() => setActiveTab('studio')}
+                        className={cn("px-3 py-1.5 rounded-md text-sm font-medium transition-all", activeTab === 'studio' ? "bg-white shadow text-stone-900" : "text-stone-600 hover:text-stone-900")}
                         >
                             <Sparkles className="inline-block mr-2 w-4 h-4" /> Hook Studio
                         </button>
                     </div>
+                
+                <Button 
+                    variant="ghost" 
+                    size="icon"
+                    onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+                    className={cn("ml-2 text-stone-700", isSidebarOpen && "bg-stone-100")}
+                >
+                    {isSidebarOpen ? <PanelRightClose size={20} /> : <PanelRightOpen size={20} />}
+                </Button>
                 </div>
-            )}
         </div>
         
-        {!selectedVideo && activeTab !== 'studio' && (
-            <div className="space-y-3">
-                {/* Search & Filters */}
-                <div className="flex gap-2 max-w-xl">
+        {/* Search & Filters - Only show in Feed/Outliers */}
+        {activeTab !== 'studio' && (
+            <div className="flex flex-wrap items-center justify-between gap-4">
+                <div className="flex gap-2 w-full max-w-lg">
                     <Input 
-                        placeholder={activeTab === 'outliers' ? "Enter niche to analyze outliers..." : "Search topic (optional)..."}
+                        placeholder={activeTab === 'outliers' ? "Enter niche to analyze outliers..." : "Search topic..."}
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
                         onKeyDown={(e) => e.key === 'Enter' && fetchTrends(null, true)}
-                        className="text-stone-900 placeholder-stone-500 font-medium"
+                        className="h-9 border-stone-300 text-stone-900 placeholder:text-stone-400"
                     />
-                    <Button onClick={() => fetchTrends(null, true)} disabled={isLoading}>
-                        {isLoading ? <Loader2 className="animate-spin mr-2" /> : <Search className="mr-2" size={18} />}
-                        {activeTab === 'outliers' ? 'Analyze' : 'Find Trends'}
+                    <Button onClick={() => fetchTrends(null, true)} disabled={isLoading} size="sm" className="text-stone-50">
+                        {isLoading ? <Loader2 className="animate-spin mr-2" size={14}/> : <Search className="mr-2" size={14} />}
+                        {activeTab === 'outliers' ? 'Analyze' : 'Search'}
                     </Button>
                 </div>
                 
-                {/* Axis Config (Outliers Only) */}
-                {activeTab === 'outliers' && (
-                    <div className="flex items-center gap-4 p-3 bg-stone-50 rounded-lg border border-stone-200">
                         <div className="flex items-center gap-2">
-                            <Settings2 size={14} className="text-stone-400" />
-                            <span className="text-xs font-bold text-stone-500 uppercase">X-Axis:</span>
-                            <select 
-                                value={xAxis}
-                                onChange={(e) => setXAxis(e.target.value)}
-                                className="bg-white border border-stone-200 text-xs rounded px-2 py-1 text-stone-700 focus:outline-none"
-                            >
-                                {AXIS_OPTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
-                            </select>
-                        </div>
-                        <div className="flex items-center gap-2">
-                            <span className="text-xs font-bold text-stone-500 uppercase">Y-Axis:</span>
-                            <select 
-                                value={yAxis}
-                                onChange={(e) => setYAxis(e.target.value)}
-                                className="bg-white border border-stone-200 text-xs rounded px-2 py-1 text-stone-700 focus:outline-none"
-                            >
-                                {AXIS_OPTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
-                            </select>
-                        </div>
-                    </div>
-                )}
-
-                {/* Other Filters */}
-                <div className="flex flex-wrap items-center gap-4">
-                     <div className="flex gap-2">
-                         <Button 
-                            variant={filter === '' ? 'secondary' : 'ghost'} 
-                            size="sm" 
-                            onClick={() => { setFilter(''); fetchTrends(null, true); }}
-                        >
-                            All Types
-                         </Button>
-                         <Button 
-                            variant={filter === 'no face' ? 'secondary' : 'ghost'} 
-                            size="sm" 
-                            onClick={() => { setFilter('no face'); fetchTrends(null, true); }}
-                        >
-                            No Face / Faceless
-                         </Button>
-                         <Button 
-                            variant={filter === 'infographic' ? 'secondary' : 'ghost'} 
-                            size="sm" 
-                            onClick={() => { setFilter('infographic'); fetchTrends(null, true); }}
-                        >
-                            Data / Infographic
-                         </Button>
-                     </div>
-                     <div className="h-6 w-px bg-stone-200 mx-2" />
-                     <div className="flex gap-2">
                          {RECENCY_OPTIONS.map((opt) => (
                              <Button
                                 key={opt.value}
                                 variant={recency === opt.value ? 'secondary' : 'ghost'}
                                 size="sm"
                                 onClick={() => setRecency(opt.value)}
-                                className={cn(recency === opt.value && "bg-stone-200")}
+                            className={cn("h-8 text-xs text-stone-600", recency === opt.value && "bg-stone-200 text-stone-900")}
                              >
-                                {recency === opt.value && <Calendar size={14} className="mr-1.5" />}
                                 {opt.label}
                              </Button>
                          ))}
-                     </div>
                 </div>
             </div>
-        )}
-         {selectedVideo && (
-            <Button variant="outline" onClick={clearSelection}>
-                <ArrowLeft className="mr-2" size={16} /> Back to {activeTab === 'outliers' ? 'Analysis' : 'Trends'}
-            </Button>
         )}
       </div>
 
+      {/* Main Layout */}
+      <div className="flex-1 flex overflow-hidden relative">
 
-      {/* Content */}
+        {/* Center Content */}
       <div className="flex-1 overflow-y-auto p-6 relative" ref={containerRef}>
-        {activeTab === 'studio' ? (
-            <div className="max-w-6xl mx-auto">
-                <div className="flex items-center justify-between mb-6">
-                    <h2 className="text-2xl font-bold text-stone-900">Hook Studio</h2>
-                    <span className="text-stone-500">{savedHooks.length} Saved Hooks</span>
-                </div>
-
-                {savedHooks.length === 0 ? (
-                    <div className="text-center py-20 text-stone-400 border-2 border-dashed border-stone-200 rounded-xl">
-                        <Sparkles className="mx-auto mb-4 opacity-50" size={48} />
-                        <p>Save generated hooks to refine them here</p>
-                        <Button variant="link" onClick={() => setActiveTab('trends')}>Find Trends</Button>
-                    </div>
-                ) : (
-                    <div className="grid grid-cols-1 gap-6">
-                        {savedHooks.map((hook) => (
-                            <div key={hook.id} className="bg-white rounded-xl border border-stone-200 shadow-sm p-6 flex flex-col md:flex-row gap-6">
-                                {/* Visuals Column */}
-                                <div className="w-full md:w-1/3 space-y-4">
-                                     {hook.generatedImages && hook.generatedImages.length > 0 ? (
-                                        <div className="space-y-2">
-                                            <div className="aspect-video w-full rounded-lg overflow-hidden bg-stone-100 border border-stone-200 relative">
-                                               <img 
-                                                   src={hook.generatedImages[hook.selectedImageIndex || 0]} 
-                                                   alt="Generated thumbnail" 
-                                                   className="w-full h-full object-cover" 
-                                               />
-                                            </div>
-                                            <div className="flex gap-2 overflow-x-auto pb-1">
-                                                {hook.generatedImages.map((img, idx) => (
-                                                    <button 
-                                                       key={idx}
-                                                       onClick={() => selectImage(hook.id, idx)}
-                                                       className={cn(
-                                                           "w-16 h-9 rounded overflow-hidden flex-shrink-0 border-2 transition-all",
-                                                           (hook.selectedImageIndex || 0) === idx ? "border-purple-500 ring-1 ring-purple-500" : "border-transparent opacity-70 hover:opacity-100"
-                                                       )}
-                                                    >
-                                                        <img src={img} className="w-full h-full object-cover" />
-                                                    </button>
-                                                ))}
-                                            </div>
-                                        </div>
-                                   ) : (
-                                       <div className="aspect-video w-full rounded-lg bg-stone-100 flex items-center justify-center text-stone-400 border border-stone-200 border-dashed">
-                                           <ImageIcon size={24} />
-                                       </div>
-                                   )}
-                                   
-                                   <Button 
-                                       variant="outline" 
-                                       size="sm" 
-                                       className="w-full"
-                                       onClick={() => generateThumbnailImage(hook.id, hook.thumbnailConcept)}
-                                       disabled={hook.isGeneratingImage}
-                                   >
-                                       {hook.isGeneratingImage ? <Loader2 className="animate-spin mr-2" size={14} /> : <RefreshCw className="mr-2" size={14} />}
-                                       {hook.generatedImages ? 'Regenerate Visuals' : 'Generate Visuals'}
-                                   </Button>
-                                </div>
-
-                                {/* Content Column */}
-                                <div className="flex-1 space-y-6">
-                                    <div className="space-y-2">
-                                        <label className="text-xs font-bold uppercase tracking-wider text-stone-500">Title</label>
-                                        <Input 
-                                            value={hook.title} 
-                                            onChange={(e) => updateSavedHookTitle(hook.id, e.target.value)}
-                                            className="text-lg font-bold text-stone-900 h-auto py-2"
-                                        />
-                                    </div>
-                                    
-                                    <div className="space-y-2">
-                                        <label className="text-xs font-bold uppercase tracking-wider text-stone-500">Hook Concept</label>
-                                        <p className="text-stone-700 text-sm leading-relaxed p-3 bg-stone-50 rounded-md border border-stone-100">
-                                            {hook.hook}
-                                        </p>
-                                    </div>
-
-                                    {/* Analysis Section */}
-                                    {hook.analysis ? (
-                                        <div className="bg-indigo-50 border border-indigo-100 rounded-lg p-4 space-y-2">
-                                            <div className="flex items-center justify-between mb-2">
-                                                <h4 className="font-bold text-indigo-900 flex items-center gap-2">
-                                                    <Sparkles size={16} className="text-indigo-500" /> AI Analysis
-                                                </h4>
-                                                <span className="bg-indigo-200 text-indigo-800 font-bold px-2 py-0.5 rounded text-sm">
-                                                    {hook.analysis.score}/10
-                                                </span>
-                                            </div>
-                                            <p className="text-sm text-indigo-800">{hook.analysis.feedback}</p>
-                                            <div className="text-xs text-indigo-600 font-medium mt-2">
-                                                💡 Tip: {hook.analysis.improvementSuggestion}
-                                            </div>
-                                        </div>
-                                    ) : (
-                                        <Button variant="ghost" size="sm" onClick={() => analyzeHook(hook)} className="text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50">
-                                            <Activity size={14} className="mr-2" /> Get AI Analysis
-                                        </Button>
-                                    )}
-
-                                    <div className="flex justify-end gap-3 pt-4 border-t border-stone-100">
-                                        <Button variant="outline" onClick={() => deleteSavedHook(hook.id)} className="text-red-500 hover:text-red-600 hover:bg-red-50 border-red-100">
-                                            <Trash2 size={16} className="mr-2" /> Remove
-                                        </Button>
-                                        <Button onClick={() => handleStartResearchClick(hook)}>
-                                            Start Research <ArrowLeft className="ml-2 rotate-180" size={16} />
-                                        </Button>
-                                    </div>
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                )}
-            </div>
-        ) : !selectedVideo ? (
-          <>
+            
             {activeTab === 'trends' && (
                 <div className="space-y-6">
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                     {/* Filters */}
+                     <div className="flex gap-2 mb-4">
+                         <Button variant={filter === '' ? 'secondary' : 'ghost'} size="sm" onClick={() => { setFilter(''); fetchTrends(null, true); }} className="text-stone-700">All</Button>
+                         <Button variant={filter === 'no face' ? 'secondary' : 'ghost'} size="sm" onClick={() => { setFilter('no face'); fetchTrends(null, true); }} className="text-stone-700">No Face</Button>
+                         <Button variant={filter === 'infographic' ? 'secondary' : 'ghost'} size="sm" onClick={() => { setFilter('infographic'); fetchTrends(null, true); }} className="text-stone-700">Data</Button>
+                     </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
                         {videos.map((video) => {
                             const virality = getViralityScore(video);
-                            const isSelected = selectedVideos.some(v => v.id === video.id);
+                            const inStack = contextStack.find(v => v.id === video.id);
                             return (
                             <Card 
                                 key={video.id} 
-                                className={cn(
-                                    "overflow-hidden hover:shadow-lg transition-all cursor-pointer group flex flex-col border-2",
-                                    isSelected ? "border-stone-900 ring-2 ring-stone-900 ring-offset-2" : "border-transparent"
-                                )}
-                                onClick={() => isSelectMode ? toggleSelectVideo(video) : setPreviewVideo(video)}
+                                className={cn("overflow-hidden hover:shadow-lg transition-all cursor-pointer group flex flex-col border-transparent", inStack && "ring-2 ring-green-500")}
+                                onClick={() => setPreviewVideo(video)}
                             >
                                 <div className="relative aspect-video bg-stone-200">
                                 <img src={video.thumbnail} alt={video.title} className="w-full h-full object-cover" />
                                 
-                                {isSelectMode ? (
-                                     <div className={cn("absolute top-2 right-2 w-6 h-6 rounded-full border-2 flex items-center justify-center transition-colors", isSelected ? "bg-stone-900 border-stone-900 text-white" : "bg-black/50 border-white text-transparent")}>
-                                         <Check size={14} />
-                                     </div>
-                                ) : (
-                                    <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
-                                        <Button variant="secondary" className="opacity-0 group-hover:opacity-100 transition-opacity">
-                                        <Eye className="mr-2" size={16} /> Preview
+                                <div className="absolute top-2 right-2 z-10">
+                                    <Button 
+                                        size="icon"
+                                        className={cn("h-8 w-8 rounded-full", inStack ? "bg-green-500 hover:bg-green-600 text-white" : "bg-black/50 hover:bg-black/70 text-white")}
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            if (inStack) removeFromContextStack(video.id);
+                                            else addToContextStack(video);
+                                        }}
+                                    >
+                                        {inStack ? <Check size={14} /> : <Plus size={14} />}
                                         </Button>
                                     </div>
-                                )}
+
                                 {virality && (
-                                    <div className="absolute bottom-2 right-2 bg-green-500 text-white text-xs font-bold px-2 py-1 rounded-md shadow-sm flex items-center">
-                                        <BarChart2 size={12} className="mr-1" /> {virality} Viral
+                                    <div className="absolute bottom-2 right-2 bg-green-500 text-white text-[10px] font-bold px-2 py-1 rounded shadow-sm">
+                                        {virality} Viral
                                     </div>
                                 )}
                                 </div>
-                                <div className="p-4 flex-1 flex flex-col">
-                                <h3 className="font-semibold line-clamp-2 mb-1">{video.title}</h3>
-                                <div className="flex items-center justify-between text-sm text-stone-500 mt-auto">
+                                <div className="p-3 flex-1 flex flex-col">
+                                <h3 className="font-semibold line-clamp-2 text-sm mb-1 leading-tight text-stone-900">{video.title}</h3>
+                                <div className="flex items-center justify-between text-xs text-stone-600 mt-auto">
                                     <span className="truncate pr-2">{video.channelTitle}</span>
-                                    <span className="whitespace-nowrap">{parseInt(video.viewCount).toLocaleString()} views</span>
+                                    <span>{parseInt(video.viewCount).toLocaleString()} views</span>
                                 </div>
                                 </div>
                             </Card>
                             );
                         })}
                     </div>
-                    
-                    {videos.length > 0 && nextPageToken && (
+                    {nextPageToken && (
                         <div className="flex justify-center pt-4">
-                            <Button variant="outline" onClick={() => fetchTrends(nextPageToken)} disabled={isLoading}>
-                                {isLoading && <Loader2 className="animate-spin mr-2" size={16} />}
-                                Load More Videos
+                            <Button variant="outline" onClick={() => fetchTrends(nextPageToken)} disabled={isLoading} className="text-stone-700">
+                                Load More
                             </Button>
                         </div>
                     )}
@@ -621,93 +669,81 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
             )}
 
             {activeTab === 'outliers' && (
-                <div className="min-h-[600px] w-full bg-stone-50 rounded-xl border border-stone-200 relative overflow-hidden p-8">
-                    {videos.length === 0 && !isLoading && (
-                        <div className="absolute inset-0 flex items-center justify-center text-stone-400">
-                            <p>Enter a niche to analyze outliers</p>
+                <div className="h-full flex flex-col">
+                     {/* Axis Controls */}
+                    <div className="flex items-center gap-4 mb-4 p-2 bg-stone-100 rounded-lg w-fit">
+                         <div className="flex items-center gap-2">
+                            <span className="text-xs font-bold text-stone-600">X:</span>
+                            <select value={xAxis} onChange={(e) => setXAxis(e.target.value)} className="bg-white text-stone-700 text-xs p-1 rounded border border-stone-300">
+                                {AXIS_OPTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+                            </select>
                         </div>
-                    )}
-                    
-                    {videos.length > 0 && (
-                        <>
-                            {/* Graph Axes */}
-                            <div className="absolute left-12 bottom-12 right-8 top-8 border-l border-b border-stone-300">
-                                {/* Y Label */}
-                                <div className="absolute -left-10 top-1/2 -translate-y-1/2 -rotate-90 text-xs font-bold text-stone-500 tracking-wider">
-                                    {AXIS_OPTIONS.find(o => o.value === yAxis)?.label || yAxis} (Log)
+                        <div className="flex items-center gap-2">
+                            <span className="text-xs font-bold text-stone-600">Y:</span>
+                            <select value={yAxis} onChange={(e) => setYAxis(e.target.value)} className="bg-white text-stone-700 text-xs p-1 rounded border border-stone-300">
+                                {AXIS_OPTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+                            </select>
                                 </div>
-                                {/* X Label */}
-                                <div className="absolute bottom-[-30px] left-1/2 -translate-x-1/2 text-xs font-bold text-stone-500 tracking-wider">
-                                    {AXIS_OPTIONS.find(o => o.value === xAxis)?.label || xAxis} (Log)
                                 </div>
 
-                                {/* Grid Lines */}
-                                <div className="absolute left-0 top-1/4 w-full h-px bg-stone-100" />
-                                <div className="absolute left-0 top-2/4 w-full h-px bg-stone-100" />
-                                <div className="absolute left-0 top-3/4 w-full h-px bg-stone-100" />
-                                
-                                {/* Bubbles */}
+                    <div className="flex-1 bg-white rounded-xl border border-stone-200 relative overflow-hidden">
+                        {/* Graph Implementation */}
+                        <div className="absolute inset-0 m-8 border-l border-b border-stone-300">
                                 <AnimatePresence>
                                     {videos.map((video) => {
-                                        const isSelected = selectedVideos.some(v => v.id === video.id);
+                                        const inStack = contextStack.find(v => v.id === video.id);
                                         const rawXVal = getValue(video, xAxis);
                                         const rawYVal = getValue(video, yAxis);
-
-                                        // Log Scale
                                         const xRaw = getLogPos(rawXVal, minX, maxX);
                                         const yRaw = getLogPos(rawYVal, minY, maxY);
-                                        
-                                        // Clamp strictly within visible area (5% - 95%)
                                         const x = Math.min(Math.max(xRaw, 5), 95);
                                         const y = Math.min(Math.max(yRaw, 5), 95);
-                                        
-                                        const size = 40 + Math.min((parseInt(video.viewCount) / maxViews) * 60, 60);
+                                        const size = 30 + Math.min((parseInt(video.viewCount) / maxViews) * 50, 50);
 
                                         return (
                                             <motion.div
                                                 key={video.id}
                                                 initial={{ opacity: 0, scale: 0 }}
                                                 animate={{ 
-                                                    opacity: 1, 
-                                                    scale: 1, 
-                                                    x: `${x}%`, 
-                                                    y: `${100 - y}%`,
-                                                    borderWidth: isSelected ? 4 : 0,
-                                                    borderColor: isSelected ? '#1c1917' : 'transparent'
+                                                    opacity: 1, scale: 1, x: `${x}%`, y: `${100 - y}%`,
                                                 }}
-                                                className={cn(
-                                                    "absolute transform -translate-x-1/2 -translate-y-1/2 cursor-pointer group z-10 hover:z-50 rounded-full transition-colors",
-                                                    isSelected && "z-40"
-                                                )}
-                                                style={{ 
-                                                    left: `${x}%`, 
-                                                    top: `${100 - y}%`,
-                                                    width: size,
-                                                    height: size
-                                                }}
-                                                onClick={() => isSelectMode ? toggleSelectVideo(video) : setPreviewVideo(video)}
-                                                whileHover={{ scale: 1.2, zIndex: 100 }}
+                                                whileHover={{ scale: 1.2, zIndex: 50 }}
+                                                className="absolute transform -translate-x-1/2 -translate-y-1/2 cursor-pointer group z-10"
+                                                style={{ left: `${x}%`, top: `${100 - y}%`, width: size, height: size }}
+                                                onClick={() => setPreviewVideo(video)}
                                             >
-                                                <div className="w-full h-full rounded-full overflow-hidden border-2 border-white shadow-lg relative bg-stone-200">
-                                                    <img src={video.thumbnail} className="w-full h-full object-cover" alt={video.title} />
-                                                    {isSelectMode && isSelected && (
-                                                        <div className="absolute inset-0 bg-stone-900/50 flex items-center justify-center">
-                                                            <Check className="text-white" size={20} />
+                                                <div className={cn(
+                                                    "w-full h-full rounded-full overflow-hidden border-2 shadow-lg relative bg-stone-200 transition-all",
+                                                    inStack ? "border-green-500 ring-2 ring-green-500 ring-offset-1" : "border-white"
+                                                )}>
+                                                    <img src={video.thumbnail} className="w-full h-full object-cover" />
+                                                    
+                                                    {/* Hover Overlay with Plus Button (Fixed Position) */}
+                                                    <div className="absolute top-0 right-0 p-1 opacity-0 group-hover:opacity-100 transition-opacity z-20">
+                                                        <Button 
+                                                            size="icon" 
+                                                            className={cn("rounded-full h-6 w-6 shadow-md border border-black/10", inStack ? "bg-red-500 hover:bg-red-600 text-white" : "bg-white text-black hover:bg-stone-100")}
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                if (inStack) removeFromContextStack(video.id);
+                                                                else addToContextStack(video);
+                                                            }}
+                                                        >
+                                                            {inStack ? <Minus size={14} /> : <Plus size={14} />}
+                                                        </Button>
                                                         </div>
-                                                    )}
                                                 </div>
                                                 
-                                                {/* Tooltip - Reversed Vertical Logic & Clamped Horizontal */}
+                                                {/* Tooltip */}
                                                 <div className={cn(
-                                                    "absolute left-1/2 -translate-x-1/2 w-64 bg-stone-900/95 backdrop-blur-sm text-white text-xs p-3 rounded-lg shadow-xl pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity z-50 flex flex-col gap-1",
-                                                    y < 40 ? "bottom-full mb-3" : "top-full mt-3", // Reversed: if Y is small (bottom), show tooltip ABOVE. If Y is large (top), show BELOW.
-                                                    x < 20 ? "left-0 translate-x-0" : "", 
-                                                    x > 80 ? "right-0 left-auto translate-x-0" : ""
+                                                    "absolute w-48 bg-stone-900/95 backdrop-blur text-white text-xs p-3 rounded-lg shadow-xl opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none flex flex-col gap-1 z-50",
+                                                    y < 50 ? "bottom-full mb-2" : "top-full mt-2", 
+                                                    x < 20 ? "left-0" : x > 80 ? "right-0" : "left-1/2 -translate-x-1/2"
                                                 )}>
-                                                    <p className="font-bold line-clamp-2 text-sm">{video.title}</p>
-                                                    <div className="flex justify-between text-stone-300 mt-1 border-t border-white/10 pt-2">
+                                                    <p className="font-bold line-clamp-2">{video.title}</p>
+                                                    <div className="flex justify-between text-stone-300 pt-1 border-t border-white/10 mt-1">
                                                         <span>{parseInt(video.viewCount).toLocaleString()} views</span>
-                                                        <span className="text-green-400 font-bold">{video.outlierScore?.toFixed(1)}x Outlier</span>
+                                                        <span className="text-green-400 font-bold">{video.outlierScore}x</span>
                                                     </div>
                                                 </div>
                                             </motion.div>
@@ -715,330 +751,308 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
                                     })}
                                 </AnimatePresence>
                             </div>
-                        </>
-                    )}
+                    </div>
                 </div>
             )}
 
-            {/* Selected List (Vertical) */}
-            {isSelectMode && selectedVideos.length > 0 && (
-                <div className="mt-8 border-t border-stone-200 pt-6 pb-20">
-                    <div className="flex items-center justify-between mb-4">
-                        <h3 className="text-lg font-bold text-stone-900">Selected Videos ({selectedVideos.length})</h3>
-                        <Button size="sm" onClick={() => generateHooks(undefined, false, selectedVideos)}>
-                            <Sparkles size={14} className="mr-2" /> Generate Batch Hooks
+            {activeTab === 'studio' && (
+                <div className="max-w-6xl mx-auto">
+                    <div className="flex items-center justify-between mb-6">
+                        <div className="flex gap-2 bg-stone-100 p-1 rounded-lg">
+                            <button
+                                onClick={() => setStudioTab('generate')}
+                                className={cn("px-4 py-2 rounded-md text-sm font-bold transition-all", studioTab === 'generate' ? "bg-white shadow text-stone-900" : "text-stone-600 hover:text-stone-900")}
+                            >
+                                Generated Concepts
+                            </button>
+                            <button
+                                onClick={() => setStudioTab('saved')}
+                                className={cn("px-4 py-2 rounded-md text-sm font-bold transition-all", studioTab === 'saved' ? "bg-white shadow text-stone-900" : "text-stone-600 hover:text-stone-900")}
+                            >
+                                Saved Collection ({savedHooks.length})
+                            </button>
+                </div>
+
+                        <div className="flex gap-2">
+                             {studioTab === 'generate' && generatedHooks.length > 0 && (
+                                 <Button variant="outline" onClick={() => setGeneratedHooks([])}>Clear Generated</Button>
+                             )}
+                        </div>
+                    </div>
+
+                    {/* Generated Hooks Section */}
+                    {studioTab === 'generate' && (
+                        <div className="mb-12">
+                             {(generatedHooks.length > 0 || isLoading) ? (
+                                 <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
+                                    {generatedHooks.map(hook => (
+                                        <Card key={hook.id} className="p-5 border-2 border-stone-200 hover:border-purple-200 transition-all">
+                                             <div className="flex justify-between items-start mb-3">
+                                                 <h4 className="font-bold text-lg leading-tight text-stone-900">{hook.title}</h4>
+                                                 <div className="flex gap-1">
+                                                     <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => handleLike(hook.id)}>
+                                                         <ThumbsUp size={14} className={hook.liked ? "text-green-500 fill-green-500" : "text-stone-400"} />
+                                                     </Button>
+                                                     <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => saveHook(hook)}>
+                                                         <Save size={14} className={savedHooks.find(h => h.id === hook.id) ? "text-purple-500 fill-purple-500" : "text-stone-400"} />
                         </Button>
                     </div>
-                    <div className="space-y-3">
-                        {selectedVideos.map(v => (
-                            <div key={v.id} className="flex gap-4 items-center bg-white p-3 rounded-lg border border-stone-200 shadow-sm">
-                                <img src={v.thumbnail} className="w-32 h-20 object-cover rounded-md" alt={v.title} />
-                                <div className="flex-1 min-w-0">
-                                    <h4 className="font-bold text-sm line-clamp-1 text-stone-900">{v.title}</h4>
-                                    <p className="text-xs text-stone-500 mt-1">{v.channelTitle} • {parseInt(v.viewCount).toLocaleString()} views</p>
-                                    {v.outlierScore && (
-                                        <span className="inline-block mt-2 bg-green-50 text-green-700 text-xs px-2 py-0.5 rounded font-bold">
-                                            {v.outlierScore}x Outlier
-                                        </span>
-                                    )}
                                 </div>
-                                <Button variant="ghost" size="icon" onClick={() => toggleSelectVideo(v)}>
-                                    <Trash2 size={16} className="text-stone-400 hover:text-red-500" />
+                                             <p className="text-stone-700 text-sm mb-4 leading-relaxed">{hook.hook}</p>
+                                             
+                                             {hook.generatedImages && hook.generatedImages.length > 0 ? (
+                                                 <div className="space-y-2">
+                                                    <img src={hook.generatedImages[hook.selectedImageIndex || 0]} className="w-full aspect-video object-cover rounded-md shadow-sm" />
+                                                    <div className="flex gap-1 overflow-x-auto pb-1">
+                                                        {hook.generatedImages.map((img, idx) => (
+                                                            <button key={idx} onClick={() => selectImage(hook.id, idx)} className={cn("w-10 h-6 rounded overflow-hidden border flex-shrink-0", (hook.selectedImageIndex || 0) === idx ? "border-purple-500" : "border-transparent")}>
+                                                                <img src={img} className="w-full h-full object-cover" />
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                    <Button className="w-full mt-2" onClick={() => handleStartResearchClick(hook)}>Start Research</Button>
+                                                 </div>
+                                             ) : (
+                                                 <div className="space-y-2">
+                                                     <p className="text-xs text-stone-500 italic">{hook.thumbnailConcept}</p>
+                                                     <Button variant="outline" className="w-full text-stone-700" onClick={() => generateThumbnailImage(hook.id, hook.thumbnailConcept)} disabled={hook.isGeneratingImage}>
+                                                         {hook.isGeneratingImage ? <Loader2 className="animate-spin mr-2" size={14} /> : <ImageIcon className="mr-2" size={14} />}
+                                                         Generate Visuals
                                 </Button>
                             </div>
-                        ))}
+                                             )}
+                                        </Card>
+                                    ))}
+                                    
+                                    {/* Streaming Placeholder */}
+                                    {isLoading && (
+                                        <Card className="p-5 border-2 border-dashed border-stone-300 bg-stone-50 flex flex-col items-center justify-center text-stone-400 min-h-[300px]">
+                                            <Loader2 className="animate-spin mb-2" size={32} />
+                                            <p className="text-sm font-medium">Generating creative angle...</p>
+                                        </Card>
+                                    )}
                     </div>
+                             ) : (
+                                 <div className="text-center py-20 border-2 border-dashed border-stone-200 rounded-xl text-stone-500">
+                                    <Sparkles className="mx-auto mb-4 opacity-30" size={48} />
+                                    <p>Select videos from the feed or analysis to generate hooks.</p>
                 </div>
             )}
-          </>
-        ) : (
-          // ... rest of component ...
-          <div className="max-w-6xl mx-auto space-y-8">
-            {/* Selected Video Info */}
-            <div className="bg-white rounded-xl border border-stone-200 shadow-sm overflow-hidden">
-                 <div className="p-4 border-b border-stone-100 bg-stone-50/50 flex justify-between items-center">
-                     <h2 className="font-bold text-stone-900">Source Content ({(selectedVideos.length > 0 && isSelectMode) ? selectedVideos.length : 1} Videos)</h2>
-                     <Button onClick={() => generateHooks(selectedVideo, true)} disabled={isLoading} size="sm" variant="outline">
-                        <RefreshCw className={`mr-2 ${isLoading ? 'animate-spin' : ''}`} size={14} />
-                        Regenerate
+                        </div>
+                    )}
+
+                    {/* Saved Hooks Section */}
+                    {studioTab === 'saved' && (
+                        <div>
+                         {savedHooks.length === 0 ? (
+                             <div className="text-center py-12 border-2 border-dashed border-stone-200 rounded-xl text-stone-500">
+                                 No saved hooks yet. Generate and save ideas!
+                             </div>
+                         ) : (
+                             <div className="space-y-4">
+                                 {savedHooks.map(hook => (
+                                     <div key={hook.id} className="bg-white p-4 rounded-xl border border-stone-200 flex gap-4 items-start shadow-sm">
+                                         <div className="w-48 flex-shrink-0 space-y-2">
+                                             {hook.generatedImages && hook.generatedImages.length > 0 ? (
+                                                 <img src={hook.generatedImages[hook.selectedImageIndex || 0]} className="w-full aspect-video object-cover rounded-lg shadow-sm" />
+                                             ) : (
+                                                 <div className="w-full aspect-video bg-stone-100 rounded-lg flex items-center justify-center text-stone-400">
+                                                     <ImageIcon size={20} />
+                                                 </div>
+                                             )}
+                                             <Button variant="outline" size="sm" className="w-full text-stone-700" onClick={() => generateThumbnailImage(hook.id, hook.thumbnailConcept)} disabled={hook.isGeneratingImage}>
+                                                 {hook.isGeneratingImage ? <Loader2 className="animate-spin mr-2" size={12}/> : <RefreshCw size={12} className="mr-2"/>}
+                                                 {hook.generatedImages ? "Regenerate" : "Generate"}
                     </Button>
                 </div>
-                <div className="p-6 overflow-x-auto">
-                    <div className="flex gap-6 pb-2">
-                        {((selectedVideos.length > 0 && isSelectMode) ? selectedVideos : [selectedVideo]).map((video) => (
-                            <div key={video.id} className="w-72 flex-shrink-0 flex flex-col gap-3">
-                                <div className="relative aspect-video">
-                                    <img src={video.thumbnail} alt={video.title} className="w-full h-full rounded-lg shadow-md object-cover" />
-                                    {video.outlierScore && (
-                                        <span className="absolute bottom-2 right-2 bg-black/70 text-white text-[10px] px-1.5 py-0.5 rounded font-bold">
-                                            {video.outlierScore}x
-                                        </span>
-                                    )}
+                                         <div className="flex-1 min-w-0">
+                                             <div className="flex justify-between">
+                                                 <Input 
+                                                    value={hook.title} 
+                                                    onChange={(e) => updateSavedHookTitle(hook.id, e.target.value)}
+                                                    className="font-bold text-lg border-transparent hover:border-stone-200 px-0 h-auto mb-1 text-stone-900 focus:ring-0"
+                                                 />
+                                                 <Button variant="ghost" size="icon" className="text-red-400 hover:text-red-600" onClick={() => deleteSavedHook(hook.id)}>
+                                                     <Trash2 size={16} />
+                                                 </Button>
+                                             </div>
+                                             <p className="text-stone-700 text-sm mb-3 leading-relaxed">{hook.hook}</p>
+                                             
+                                             {hook.analysis ? (
+                                                 <div className="bg-indigo-50 p-3 rounded text-sm text-indigo-900 border border-indigo-100">
+                                                     <div className="font-bold flex justify-between mb-1">AI Score: {hook.analysis.score}/10</div>
+                                                     {hook.analysis.feedback}
+                                                 </div>
+                                             ) : (
+                                                 <Button variant="ghost" size="sm" className="text-indigo-600 hover:bg-indigo-50" onClick={() => analyzeHook(hook)} disabled={hook.isAnalyzing}>
+                                                     {hook.isAnalyzing ? <Loader2 size={14} className="mr-2 animate-spin" /> : <Activity size={14} className="mr-2" />}
+                                                     {hook.isAnalyzing ? "Analyzing..." : "Analyze"}
+                                                 </Button>
+                                             )}
+                                             
+                                             <div className="mt-4 flex justify-end">
+                                                 <Button onClick={() => handleStartResearchClick(hook)}>Start Research <ArrowLeft className="ml-2 rotate-180" size={16}/></Button>
                                 </div>
-                                <div>
-                                    <h3 className="font-bold text-sm line-clamp-2 text-stone-900 leading-tight">{video.title}</h3>
-                                    <p className="text-xs text-stone-500 mt-1 flex items-center gap-1">
-                                        {video.channelTitle} <span className="text-stone-300">•</span> {parseInt(video.viewCount).toLocaleString()} views
-                                    </p>
                                 </div>
                             </div>
                         ))}
                     </div>
+                         )}
                 </div>
+                    )}
+                </div>
+            )}
             </div>
 
-            {/* Hooks Grid */}
-            <div className="space-y-4">
+        {/* Right Sidebar (Context Stack) */}
+        <AnimatePresence>
+            {isSidebarOpen && (
+                <motion.div 
+                    initial={{ width: 0, opacity: 0 }}
+                    animate={{ width: 320, opacity: 1 }}
+                    exit={{ width: 0, opacity: 0 }}
+                    className="bg-white border-l border-stone-200 flex flex-col h-full shadow-xl z-30"
+                >
+                    <div className="p-4 border-b border-stone-200 flex flex-col gap-4 bg-stone-50">
+                        <div className="flex justify-between items-center">
+                            <h3 className="font-bold text-stone-900">Context Stack</h3>
+                            <Button variant="ghost" size="icon" className="h-8 w-8 text-stone-500" onClick={() => setIsSidebarOpen(false)}><ChevronRight size={16}/></Button>
+                        </div>
+                        
+                        {/* Saved Stacks Toggle */}
               <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <h3 className="text-lg font-semibold text-stone-900">Generated Concepts</h3>
-                    {isLoading && <Loader2 className="animate-spin text-stone-400" size={20} />}
-                  </div>
-                  <span className="text-sm text-stone-500 font-medium">{generatedHooks.length} ideas found</span>
+                           <span className="text-xs font-bold text-stone-600 uppercase">Saved Stacks</span>
+                           <Button onClick={() => setShowSavedStacks(!showSavedStacks)} variant="ghost" size="sm" className="h-6 px-2">
+                               <FolderOpen size={14} className={cn("transition-colors", showSavedStacks ? "text-purple-500" : "text-stone-400")} />
+                           </Button>
               </div>
               
-              <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
-                {generatedHooks.map((hook) => (
-                  <Card key={hook.id} className={cn(
-                      "p-6 relative transition-all border-2 flex flex-col",
-                      hook.liked ? "border-green-500 bg-green-50/30" : "border-stone-200"
-                  )}>
-                    <div className="absolute top-2 right-2 flex gap-1 z-10">
-                        <button 
-                            onClick={() => saveHook(hook)}
-                            className={cn(
-                                "p-1.5 rounded-full transition-colors border", 
-                                savedHooks.find(h => h.id === hook.id) ? "bg-purple-100 text-purple-600 border-purple-200" : "bg-white text-stone-400 border-stone-200 hover:border-purple-200 hover:text-purple-600"
-                            )}
-                            title="Save to Studio"
-                        >
-                            {savedHooks.find(h => h.id === hook.id) ? <Check size={16} /> : <ListPlus size={16} />}
+                        {showSavedStacks && (
+                            <motion.div 
+                                initial={{ height: 0, opacity: 0 }}
+                                animate={{ height: 'auto', opacity: 1 }}
+                                className="bg-stone-100 p-2 rounded space-y-1 overflow-hidden"
+                            >
+                                {savedContextStacks.length === 0 ? (
+                                    <p className="text-xs text-stone-500 italic text-center py-2">No saved stacks</p>
+                                ) : (
+                                    savedContextStacks.map(stack => (
+                                        <div key={stack.id} className="flex justify-between items-center bg-white p-1.5 rounded border border-stone-200 text-xs group">
+                                            <button onClick={() => { loadContextStack(stack); setShowSavedStacks(false); }} className="font-medium hover:underline text-left truncate flex-1 text-stone-800">
+                                                {stack.name}
                         </button>
-                        <button 
-                            onClick={() => handleLike(hook.id)}
-                            className={cn(
-                                "p-1.5 rounded-full transition-colors border", 
-                                hook.liked ? "bg-green-100 text-green-600 border-green-200" : "bg-white text-stone-400 border-stone-200 hover:border-stone-300"
-                            )}
-                            title="Like this idea"
-                        >
-                            <ThumbsUp size={16} />
+                                            <button onClick={() => deleteSavedStack(stack.id)} className="text-stone-300 hover:text-red-500 ml-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                <Trash2 size={12} />
                         </button>
-                        <button 
-                            onClick={() => handleDiscard(hook.id)}
-                            className="p-1.5 rounded-full bg-white text-stone-400 border border-stone-200 hover:border-red-200 hover:text-red-600 hover:bg-red-50 transition-colors"
-                            title="Discard"
-                        >
-                            <X size={16} />
-                        </button>
+                                        </div>
+                                    ))
+                                )}
+                            </motion.div>
+                        )}
                     </div>
 
-                    <div className="space-y-4 mt-2 flex-1">
-                      <div>
-                        <span className="text-xs font-bold uppercase tracking-wider text-stone-500">Title</span>
-                        <p className="text-lg font-bold leading-tight mt-1 text-stone-900">{hook.title}</p>
+                    <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                        {contextStack.length === 0 ? (
+                            <div className="text-center text-stone-500 text-sm py-8">
+                                <ListPlus size={32} className="mx-auto mb-2 opacity-40" />
+                                <p>Select videos from Feed or Analysis to build context</p>
                       </div>
-                      <div>
-                        <span className="text-xs font-bold uppercase tracking-wider text-stone-500">Hook</span>
-                        <p className="text-stone-700 mt-1 text-sm leading-relaxed font-medium">{hook.hook}</p>
-                      </div>
-                      <div>
-                        <span className="text-xs font-bold uppercase tracking-wider text-stone-500 block mb-2">Thumbnail Concept</span>
-                        <p className="text-xs text-stone-600 italic mb-3">{hook.thumbnailConcept}</p>
-                        
-                        {hook.generatedImages && hook.generatedImages.length > 0 ? (
-                             <div className="space-y-2">
-                                 <div className="aspect-video w-full rounded-lg overflow-hidden bg-stone-100 border border-stone-200 relative group">
-                                    <img 
-                                        src={hook.generatedImages[hook.selectedImageIndex || 0]} 
-                                        alt="Generated thumbnail" 
-                                        className="w-full h-full object-cover" 
+                        ) : (
+                            <>
+                                <div className="flex gap-2 mb-4">
+                                    <Input 
+                                        placeholder="Stack name..." 
+                                        value={stackName} 
+                                        onChange={(e) => setStackName(e.target.value)}
+                                        className="h-8 text-sm text-stone-900"
                                     />
-                                    {/* Overlay for Research Action */}
-                                    <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100">
-                                        <Button size="sm" onClick={() => handleStartResearchClick(hook)}>
-                                            <Plus className="mr-2" size={16} /> Start Research
-                                        </Button>
+                                    <Button size="sm" variant="outline" onClick={saveContextStack} disabled={!stackName} className="text-stone-700">Save</Button>
+                      </div>
+                                
+                                <div className="space-y-3">
+                                    {contextStack.map((video) => (
+                                        <div key={video.id} className="bg-white rounded-lg p-2 border border-stone-200 relative group shadow-sm">
+                                            <div className="flex gap-3">
+                                                <img src={video.thumbnail} className="w-20 h-12 object-cover rounded border border-stone-100" />
+                                                <div className="flex-1 min-w-0">
+                                                    <p className="text-xs font-bold line-clamp-2 text-stone-900">{video.title}</p>
+                                                    <p className="text-[10px] text-stone-500 mt-1 truncate">{video.channelTitle}</p>
                                     </div>
                                  </div>
-                                 {/* Thumbnail Selector */}
-                                 <div className="flex gap-2 overflow-x-auto pb-2">
-                                     {hook.generatedImages.map((img, idx) => (
                                          <button 
-                                            key={idx}
-                                            onClick={() => selectImage(hook.id, idx)}
-                                            className={cn(
-                                                "w-16 h-9 rounded overflow-hidden flex-shrink-0 border-2 transition-all",
-                                                (hook.selectedImageIndex || 0) === idx ? "border-purple-500 ring-1 ring-purple-500" : "border-transparent opacity-70 hover:opacity-100"
-                                            )}
-                                         >
-                                             <img src={img} className="w-full h-full object-cover" />
+                                                onClick={() => removeFromContextStack(video.id)}
+                                                className="absolute -top-2 -right-2 bg-white border border-stone-200 rounded-full p-1 text-stone-400 hover:text-red-500 shadow-sm opacity-0 group-hover:opacity-100 transition-opacity"
+                                            >
+                                                <X size={12} />
                                          </button>
+                                        </div>
                                      ))}
                                  </div>
-                             </div>
-                        ) : (
-                            <Button 
-                                variant="outline" 
-                                size="sm" 
-                                className="w-full"
-                                onClick={() => generateThumbnailImage(hook.id, hook.thumbnailConcept)}
-                                disabled={hook.isGeneratingImage}
-                            >
-                                {hook.isGeneratingImage ? <Loader2 className="animate-spin mr-2" size={14} /> : <ImageIcon className="mr-2" size={14} />}
-                                Generate 4 Visuals
-                            </Button>
+                            </>
                         )}
-                      </div>
                     </div>
                     
-                    {hook.generatedImages && (
-                        <div className="pt-4 mt-4 border-t border-stone-100">
+                    <div className="p-4 border-t border-stone-200 bg-stone-50">
                             <Button 
-                                className="w-full" 
-                                variant={hook.liked ? "default" : "outline"}
-                                onClick={() => handleStartResearchClick(hook)}
-                            >
-                                Start Research with this Concept
+                            className="w-full text-stone-50" 
+                            disabled={contextStack.length === 0 || isLoading}
+                            onClick={() => generateHooks(undefined, false, contextStack)}
+                        >
+                            {isLoading ? <Loader2 className="animate-spin mr-2"/> : <Sparkles className="mr-2"/>}
+                            Generate Batch
                             </Button>
+                        <p className="text-[10px] text-stone-500 text-center mt-2">
+                            Generates ideas based on {contextStack.length} context videos
+                        </p>
                         </div>
-                    )}
-                  </Card>
-                ))}
-              </div>
+                </motion.div>
+            )}
+        </AnimatePresence>
 
-              {/* Load More / Generate More Button */}
-              {generatedHooks.length > 0 && generatedHooks.some(h => h.liked) && (
-                  <div className="flex justify-center py-8">
-                      <Button 
-                        size="lg" 
-                        className="bg-stone-900 text-white hover:bg-stone-800 shadow-xl"
-                        onClick={() => generateHooks(undefined, true, (selectedVideos.length > 0 && isSelectMode) ? selectedVideos : undefined)}
-                        disabled={isLoading}
-                      >
-                          {isLoading ? <Loader2 className="animate-spin mr-2" /> : <Sparkles className="mr-2" />}
-                          Generate More Creative Variations
-                      </Button>
                   </div>
-              )}
-            </div>
-          </div>
-        )}
-        
-        {!isLoading && videos.length === 0 && !selectedVideo && activeTab === 'trends' && (
-          <div className="flex flex-col items-center justify-center h-64 text-stone-400">
-            <Play size={48} className="mb-4 opacity-50" />
-            <p>Search or click "Find Trends" to get started</p>
-          </div>
-        )}
 
-        {/* Video Preview Modal */}
+      {/* Preview Modal */}
         <AnimatePresence>
             {previewVideo && (
+            <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-8" onClick={() => setPreviewVideo(null)}>
                 <motion.div 
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4"
-                    onClick={() => setPreviewVideo(null)}
+                    initial={{ opacity: 0, scale: 0.9 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.9 }}
+                    className="bg-white rounded-xl overflow-hidden max-w-4xl w-full max-h-full flex flex-col"
+                    onClick={e => e.stopPropagation()}
                 >
-                    <motion.div 
-                        initial={{ scale: 0.95, opacity: 0, y: 20 }}
-                        animate={{ scale: 1, opacity: 1, y: 0 }}
-                        exit={{ scale: 0.95, opacity: 0, y: 20 }}
-                        transition={{ type: "spring", duration: 0.3 }}
-                        className="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col"
-                        onClick={(e) => e.stopPropagation()}
-                    >
-                        <div className="relative aspect-video bg-black">
+                    <div className="aspect-video bg-black">
                              <iframe 
-                                width="100%" 
-                                height="100%" 
                                 src={`https://www.youtube.com/embed/${previewVideo.id}?autoplay=1`} 
-                                title={previewVideo.title} 
-                                frameBorder="0" 
-                                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
-                                allowFullScreen
                                 className="w-full h-full"
-                            />
-                            <button 
-                                onClick={() => setPreviewVideo(null)}
-                                className="absolute top-4 right-4 p-2 bg-black/50 hover:bg-black/70 text-white rounded-full transition-colors z-10"
-                            >
-                                <X size={20} />
-                            </button>
+                            allowFullScreen
+                        />
                         </div>
-                        
-                        <div className="p-6 overflow-y-auto">
-                            <div className="flex items-start gap-4 mb-4">
-                                <div className="w-32 flex-shrink-0">
-                                    <img src={previewVideo.thumbnail} alt="Thumbnail" className="w-full rounded-md shadow-sm" />
-                                </div>
+                    <div className="p-6 bg-white flex justify-between items-start">
                                 <div>
-                                    <h2 className="text-2xl font-bold text-stone-900 mb-2">{previewVideo.title}</h2>
-                                    <div className="flex flex-wrap gap-4 text-sm text-stone-600">
-                                        <span className="flex items-center gap-1 font-medium text-stone-900">
-                                            <Users size={16} /> {previewVideo.channelTitle}
-                                        </span>
-                                        <span className="flex items-center gap-1">
-                                            <Eye size={16} /> {parseInt(previewVideo.viewCount).toLocaleString()} views
-                                        </span>
+                            <h2 className="text-xl font-bold mb-2 text-stone-900">{previewVideo.title}</h2>
+                            <p className="text-stone-600">{previewVideo.channelTitle} • {parseInt(previewVideo.viewCount).toLocaleString()} views</p>
                                     </div>
-                                </div>
-                            </div>
-
-                            <div className="flex flex-wrap gap-4 text-sm text-stone-600 mb-4">
-                                {previewVideo.likeCount && (
-                                    <span className="flex items-center gap-1">
-                                        <Heart size={16} /> {parseInt(previewVideo.likeCount).toLocaleString()} likes
-                                    </span>
-                                )}
-                                {previewVideo.outlierScore && (
-                                     <span className="flex items-center gap-1 text-green-600 font-bold bg-green-50 px-2 py-0.5 rounded">
-                                        <Activity size={16} /> {previewVideo.outlierScore}x Outlier
-                                    </span>
-                                )}
-                                <span className="flex items-center gap-1 text-stone-500">
-                                    <Calendar size={16} /> {new Date(previewVideo.publishedAt).toLocaleDateString()}
-                                </span>
-                            </div>
-                            
-                            <div className="bg-stone-50 p-4 rounded-lg mb-6 border border-stone-100">
-                                <h3 className="text-xs font-bold uppercase text-stone-500 mb-2">Description</h3>
-                                <p className="text-sm text-stone-700 whitespace-pre-wrap font-medium leading-relaxed">{previewVideo.description?.slice(0, 500)}...</p>
-                            </div>
-
-                            <div className="flex justify-end gap-3">
-                                <Button variant="ghost" onClick={() => setPreviewVideo(null)}>
-                                    Close
+                        <div className="flex gap-2">
+                            <Button variant="outline" onClick={() => {
+                                if (contextStack.find(v => v.id === previewVideo.id)) removeFromContextStack(previewVideo.id);
+                                else addToContextStack(previewVideo);
+                            }} className="text-stone-700">
+                                {contextStack.find(v => v.id === previewVideo.id) ? "Remove from Stack" : "Add to Stack"}
                                 </Button>
-                                <Button 
-                                    variant="secondary"
-                                    onClick={() => {
-                                        toggleSelectVideo(previewVideo);
+                            <Button onClick={() => {
+                                generateHooks(previewVideo);
                                         setPreviewVideo(null);
-                                    }}
-                                >
-                                    {selectedVideos.find(v => v.id === previewVideo.id) ? (
-                                        <>
-                                            <Check className="mr-2" size={16} /> Selected
-                                        </>
-                                    ) : (
-                                        <>
-                                            <ListPlus className="mr-2" size={16} /> Add to Select List
-                                        </>
-                                    )}
-                                </Button>
-                                <Button onClick={() => generateHooks(previewVideo)}>
-                                    <Sparkles className="mr-2" size={16} /> Generate Hooks
+                            }} className="text-stone-50">
+                                Generate Hooks
                                 </Button>
                             </div>
                         </div>
                     </motion.div>
-                </motion.div>
+            </div>
             )}
         </AnimatePresence>
-      </div>
     </div>
   );
 }

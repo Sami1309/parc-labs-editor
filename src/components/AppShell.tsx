@@ -37,6 +37,9 @@ export function AppShell() {
             isLoading: false 
         },
     };
+    // Ensure description is passed if available (though hookData interface in AppShell might need update or we assume content covers it)
+    // The user asked for thumbnail, hook and description. 'content' maps to hook/description.
+    
     setNodes([newStartNode]);
     setEdges([]); // Reset edges for fresh start
     setActiveView('research');

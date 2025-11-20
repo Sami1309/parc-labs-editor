@@ -1,5 +1,5 @@
 import { google } from '@ai-sdk/google';
-import { generateObject } from 'ai';
+import { generateObject, streamText } from 'ai';
 import { z } from 'zod';
 import { GoogleGenAI } from '@google/genai';
 
@@ -267,7 +267,7 @@ async function generateImage(prompt: string): Promise<string | null> {
 
 export async function POST(req: Request) {
   try {
-    const { action, query, video, likedHooks, pageToken, semanticFilter, concept, isOutlierMode, publishedAfter } = await req.json();
+    const { action, query, video, likedHooks, pageToken, semanticFilter, concept, isOutlierMode, publishedAfter, title, hook, videoTitles } = await req.json();
 
     if (action === 'fetch_trends') {
       const result = await fetchYouTubeTrends(query, pageToken, semanticFilter, isOutlierMode, publishedAfter);
@@ -279,7 +279,6 @@ export async function POST(req: Request) {
         return new Response(JSON.stringify({ error: 'Video data required' }), { status: 400 });
       }
 
-      // If likedHooks provided, influence the generation
       const contextPrompt = likedHooks && likedHooks.length > 0 
         ? `The user liked these previously generated hooks: 
            ${JSON.stringify(likedHooks.map((h: any) => h.title))}
@@ -288,39 +287,75 @@ export async function POST(req: Request) {
            Do not just copy them. Evolve the concepts to be even more viral.`
         : 'Generate 1 unique hook concept.';
 
-      // Generate 10 hooks in parallel
-      const promises = Array(10).fill(null).map(async () => {
-        const { object: result } = await generateObject({
-            model: google('models/gemini-3-pro-preview'),
-            schema: z.object({
-              title: z.string(),
-              hook: z.string().describe('The opening line or visual hook'),
-              thumbnailConcept: z.string().describe('A visual description of the thumbnail'),
-            }),
-            prompt: `
-            Analyze this popular video and generate a viral hook/title/thumbnail concept inspired by it, but for a similar niche.
-            
-            Source Video:
-            Title: ${video.title}
-            Channel: ${video.channelTitle}
-            Views: ${video.viewCount}
-            
-            ${contextPrompt}
+        // Create a ReadableStream for streaming responses
+        const stream = new ReadableStream({
+            async start(controller) {
+                const totalHooks = 10;
+                const completedHooks: any[] = [];
 
-            Make it catchy, click-worthy, but not misleading.
-            `,
+                // Helper to push data to stream
+                const pushUpdate = (data: any) => {
+                    controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(data)}\n\n`));
+                };
+
+                try {
+                     // Generate 10 hooks in parallel but report as they finish
+                     const promises = Array(totalHooks).fill(null).map(async (_, i) => {
+                        try {
+                            const { object: result } = await generateObject({
+                                model: google('models/gemini-3-pro-preview'),
+                                schema: z.object({
+                                    title: z.string(),
+                                    hook: z.string().describe('The opening line or visual hook'),
+                                    thumbnailConcept: z.string().describe('A visual description of the thumbnail'),
+                                }),
+                                prompt: `
+                                Analyze this popular video and generate a viral hook/title/thumbnail concept inspired by it, but for a similar niche.
+                                
+                                Source Video:
+                                Title: ${video.title}
+                                Channel: ${video.channelTitle}
+                                Views: ${video.viewCount}
+                                
+                                ${contextPrompt}
+
+                                Make it catchy, click-worthy, but not misleading.
+                                `,
+                            });
+                            
+                            const hookWithId = { 
+                                ...result, 
+                                id: `gen-${Date.now()}-${i}`,
+                                generatedImages: [] 
+                            };
+
+                            completedHooks.push(hookWithId);
+                            pushUpdate({ type: 'hook', hook: hookWithId });
+
+                        } catch (e) {
+                            console.error(`Error generating hook ${i}:`, e);
+                            // Don't fail everything if one fails, just continue
+                        }
+                     });
+
+                     await Promise.all(promises);
+                     pushUpdate({ type: 'done' });
+                     controller.close();
+
+                } catch (e) {
+                     console.error("Streaming Error:", e);
+                     controller.error(e);
+                }
+            }
         });
-        return result;
+
+      return new Response(stream, { 
+          headers: { 
+              'Content-Type': 'text/event-stream',
+              'Cache-Control': 'no-cache',
+              'Connection': 'keep-alive'
+          } 
       });
-
-      const results = await Promise.all(promises);
-      const hooksWithIds = results.map((h, i) => ({ 
-          ...h, 
-          id: `gen-${Date.now()}-${i}`,
-          generatedImages: [] 
-      }));
-
-      return new Response(JSON.stringify({ hooks: hooksWithIds }), { headers: { 'Content-Type': 'application/json' } });
     }
     
     if (action === 'generate_thumbnail_image') {
@@ -343,21 +378,41 @@ export async function POST(req: Request) {
 
     if (action === 'analyze_hook') {
          const { title, hook } = await req.json();
-         const { object: analysis } = await generateObject({
-            model: google('models/gemini-3-pro-preview'),
-            schema: z.object({
-                score: z.number().min(0).max(10),
-                feedback: z.string(),
-                improvementSuggestion: z.string()
-            }),
-            prompt: `Rate this YouTube video hook and title on a scale of 1-10 for virality and click-through rate.
-            Title: ${title}
-            Hook: ${hook}
-            
-            Provide concise feedback and one concrete suggestion to improve it.`
+
+         const stream = new ReadableStream({
+             async start(controller) {
+                 try {
+                     const { textStream } = await streamText({
+                         model: google('models/gemini-3-pro-preview'),
+                         prompt: `Rate this YouTube video hook and title on a scale of 1-10 for virality and click-through rate.
+                         Title: ${title}
+                         Hook: ${hook}
+                         
+                         Provide concise feedback and one concrete suggestion to improve it. 
+                         Format as JSON: { "score": number, "feedback": "string", "improvementSuggestion": "string" }`
+                     });
+
+                     for await (const chunk of textStream) {
+                         controller.enqueue(new TextEncoder().encode(chunk));
+                     }
+                     controller.close();
+                 } catch (e) {
+                     controller.error(e);
+                 }
+             }
          });
-         
-         return new Response(JSON.stringify(analysis), { headers: { 'Content-Type': 'application/json' } });
+
+         return new Response(stream, { headers: { 'Content-Type': 'text/plain' } });
+    }
+
+    if (action === 'generate_stack_name') {
+         const { object: result } = await generateObject({
+             model: google('models/gemini-flash-latest'),
+             schema: z.object({ name: z.string() }),
+             prompt: `Generate a short, catchy name (max 3-4 words) for a collection of YouTube videos with these titles: 
+             ${videoTitles.join(', ')}`
+         });
+         return new Response(JSON.stringify({ name: result.name }), { headers: { 'Content-Type': 'application/json' } });
     }
 
     return new Response(JSON.stringify({ error: 'Invalid action' }), { status: 400 });

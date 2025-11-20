@@ -45,6 +45,37 @@ export async function POST(req: Request) {
     }
 
     const isDeepDive = !!parentNodeId;
+    const hasContext = !!parentContext;
+    
+    // Construct messages for Gemini (Text + Optional Image)
+    const userMessageContent: any[] = [
+        { type: 'text', text: `Research Topic: "${prompt}"\n\n` }
+    ];
+
+    if (hasContext) {
+        userMessageContent.push({ 
+            type: 'text', 
+            text: `Context Information:\nTitle: ${parentContext.title || 'N/A'}\nContent: ${parentContext.content || 'N/A'}\n` 
+        });
+        
+        if (parentContext.imageUrl) {
+             // Determine if it's a URL or base64? Assuming URL from our app structure.
+             // Gemini expects image parts. If it's a public URL, we might need to fetch it or pass it if supported?
+             // Vercel AI SDK google provider supports image URLs in some cases, or we might need to download.
+             // For simplicity, let's try passing the URL directly if the SDK supports it, otherwise we might skip or need to fetch.
+             // The AI SDK 'UserContent' supports 'image' type with 'image' as URL or buffer.
+             userMessageContent.push({ type: 'image', image: parentContext.imageUrl });
+        }
+    }
+
+    const systemPrompt = `You are an expert video researcher. 
+      ${isDeepDive 
+        ? `The user wants to deep dive into a specific aspect of the previous research.` 
+        : `The user wants to start a new video research project.`}
+      
+      ${hasContext ? `Use the provided context (Title, Content, and optional Image) to inform your search queries.` : ''}
+      
+      Generate 2-3 specific, high-quality search queries to gather information and visual assets.`;
 
     // 1. Generate search queries using Gemini
     const { object: searchPlan } = await generateObject({
@@ -53,14 +84,10 @@ export async function POST(req: Request) {
         queries: z.array(z.string()).describe('List of 2-3 specific search queries.'),
         angle: z.string().describe('The creative angle or direction for the research'),
       }),
-      prompt: `You are an expert video researcher. 
-      ${isDeepDive 
-        ? `The user wants to deep dive into a specific aspect: "${prompt}". 
-           Context from parent node: "${parentContext?.title || ''}: ${parentContext?.content || ''}".
-           Find detailed info and visual assets related to this specific context.` 
-        : `The user wants to make a video about: "${prompt}". Generate a research plan.`}
-      
-      Generate 2-3 specific, high-quality search queries.`,
+      messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userMessageContent }
+      ]
     });
 
     // 2. Execute searches using Exa

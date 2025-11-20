@@ -24,6 +24,7 @@ export function AppShell() {
   // Lifted state for ResearchFlow
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+  const [sessionName, setSessionName] = useState<string | null>(null);
 
   const handleStartResearch = (hookData: { title: string, hook: string, image?: string }) => {
     const newStartNode: Node = {
@@ -37,11 +38,10 @@ export function AppShell() {
             isLoading: false 
         },
     };
-    // Ensure description is passed if available (though hookData interface in AppShell might need update or we assume content covers it)
-    // The user asked for thumbnail, hook and description. 'content' maps to hook/description.
     
     setNodes([newStartNode]);
     setEdges([]); // Reset edges for fresh start
+    setSessionName(hookData.title); // Auto-set session name from hook title
     setActiveView('research');
   };
 
@@ -64,6 +64,8 @@ export function AppShell() {
             onEdgesChange={onEdgesChange}
             setNodes={setNodes}
             setEdges={setEdges}
+            sessionName={sessionName}
+            setSessionName={setSessionName}
           />
         )}
         {activeView === 'storyboard' && <Storyboard researchNodes={nodes} />}

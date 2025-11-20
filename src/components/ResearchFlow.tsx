@@ -20,7 +20,7 @@ import ResultNode from './nodes/ResultNode';
 import { PromptBar } from './PromptBar';
 import { ResearchDialog } from './ResearchDialog';
 
-import { Plus, Save, FolderOpen, ChevronDown } from 'lucide-react';
+import { Plus, Save, FolderOpen, ChevronDown, Trash2, RotateCcw } from 'lucide-react';
 
 const nodeTypes = {
   start: StartNode,
@@ -42,6 +42,8 @@ interface ResearchFlowProps {
   onEdgesChange: OnEdgesChange;
   setNodes: React.Dispatch<React.SetStateAction<Node[]>>;
   setEdges: React.Dispatch<React.SetStateAction<Edge[]>>;
+  sessionName: string | null;
+  setSessionName: (name: string | null) => void;
 }
 
 export default function ResearchFlow({
@@ -51,6 +53,8 @@ export default function ResearchFlow({
   onEdgesChange,
   setNodes,
   setEdges,
+  sessionName,
+  setSessionName,
 }: ResearchFlowProps) {
   // UI State
   const [promptState, setPromptState] = useState<{ isOpen: boolean; nodeId: string | null }>({
@@ -58,9 +62,11 @@ export default function ResearchFlow({
     nodeId: null,
   });
   const [isLoading, setIsLoading] = useState(false);
-  const [sessionName, setSessionName] = useState<string | null>(null);
   const [savedSessions, setSavedSessions] = useState<SavedSession[]>([]);
   const [showLoadMenu, setShowLoadMenu] = useState(false);
+  
+  const nodesRef = React.useRef(nodes);
+  nodesRef.current = nodes;
   
   // Dialog State
   const [dialogState, setDialogState] = useState<{
@@ -133,30 +139,15 @@ export default function ResearchFlow({
       setEdges((eds) => [...eds, ...resultEdges]);
   };
 
-  // New handler for in-node research (Asset nodes)
-  const handleInNodeResearch = async (nodeId: string, prompt: string) => {
-      // Set specific node to loading
-      // @ts-ignore
-      setNodes(nds => nds.map(n => 
-          n.id === nodeId ? { ...n, data: { ...n.data, isLoading: true, loadingText: `Researching "${prompt}"...` } } : n
-      ));
-
-      await performResearch(prompt, nodeId);
-
-      // Remove loading state
-      // @ts-ignore
-      setNodes(nds => nds.map(n => 
-        n.id === nodeId ? { ...n, data: { ...n.data, isLoading: false } } : n
-      ));
-  };
-
+  // Helper to perform research
   const performResearch = async (prompt: string, parentId: string) => {
     try {
       // Get parent context
-      const parentNode = nodes.find(n => n.id === parentId);
+      const parentNode = nodesRef.current.find(n => n.id === parentId);
       const parentContext = parentNode ? {
           title: parentNode.data.label || parentNode.data.title,
-          content: parentNode.data.content
+          content: parentNode.data.content,
+          imageUrl: parentNode.data.imageUrl
       } : undefined;
 
       const response = await fetch('/api/research', {
@@ -187,21 +178,94 @@ export default function ResearchFlow({
     }
   };
 
+  // New handler for in-node research (Asset nodes)
+  const handleInNodeResearch = useCallback(async (nodeId: string, prompt: string) => {
+      // Set specific node to loading
+      // @ts-ignore
+      setNodes(nds => nds.map(n => 
+          n.id === nodeId ? { ...n, data: { ...n.data, isLoading: true, loadingText: `Researching "${prompt}"...` } } : n
+      ));
+
+      await performResearch(prompt, nodeId);
+
+      // Remove loading state
+      // @ts-ignore
+      setNodes(nds => nds.map(n => 
+        n.id === nodeId ? { ...n, data: { ...n.data, isLoading: false } } : n
+      ));
+  }, [setNodes]); 
+
+  const handleAutoResearch = useCallback(async (nodeId: string) => {
+    const node = nodesRef.current.find(n => n.id === nodeId);
+    if (!node) return;
+    
+    // For hook start nodes, the label is the title.
+    const prompt = (node.data.label as string) || "Research this topic"; 
+    
+    setIsLoading(true);
+    
+    // Update loading state
+    // @ts-ignore
+    setNodes(nds => nds.map(n => 
+        n.id === nodeId ? { ...n, data: { ...n.data, isLoading: true, loadingText: `Researching "${prompt}"...` } } : n
+    ));
+
+    await performResearch(prompt, nodeId);
+
+    setIsLoading(false);
+    // @ts-ignore
+    setNodes(nds => nds.map(n => 
+        n.id === nodeId ? { ...n, data: { ...n.data, isLoading: false } } : n
+    ));
+  }, [setNodes]);
+
+  // Inject handlers into nodes via useMemo to avoid state patching effects
+  const nodesWithHandlers = React.useMemo(() => {
+      return nodes.map(node => {
+          if (node.type === 'start') {
+              return {
+                  ...node,
+                  data: {
+                      ...node.data,
+                      onStartAutoResearch: handleAutoResearch
+                  }
+              };
+          }
+          // Ensure result nodes also have their handler if missing (e.g. from initial load if not handled elsewhere)
+          if (node.type === 'result' && !node.data.onResearch) {
+              return {
+                  ...node,
+                  data: {
+                      ...node.data,
+                      onResearch: handleInNodeResearch
+                  }
+              };
+          }
+          return node;
+      });
+  }, [nodes, handleAutoResearch, handleInNodeResearch]);
+
   const saveSession = () => {
-    if (!sessionName) return; // Should probably prompt for name if null, or auto-generate
+    let nameToSave = sessionName;
+    
+    if (!nameToSave) {
+        const userInput = prompt('Enter a name for this session:', `Research Session ${new Date().toLocaleDateString()}`);
+        if (!userInput) return; // User cancelled
+        nameToSave = userInput;
+        setSessionName(nameToSave);
+    }
     
     const session: SavedSession = {
       id: Date.now().toString(),
-      name: sessionName,
+      name: nameToSave,
       nodes,
       edges,
       timestamp: Date.now(),
     };
 
-    const newSessions = [...savedSessions.filter(s => s.name !== sessionName), session];
+    const newSessions = [...savedSessions.filter(s => s.name !== nameToSave), session];
     setSavedSessions(newSessions);
     localStorage.setItem('research_sessions', JSON.stringify(newSessions));
-    alert('Session saved!');
   };
 
   const loadSession = (session: SavedSession) => {
@@ -213,6 +277,21 @@ export default function ResearchFlow({
     setEdges(session.edges);
     setSessionName(session.name);
     setShowLoadMenu(false);
+  };
+
+  const deleteSession = (sessionId: string, e: React.MouseEvent) => {
+      e.stopPropagation();
+      const newSessions = savedSessions.filter(s => s.id !== sessionId);
+      setSavedSessions(newSessions);
+      localStorage.setItem('research_sessions', JSON.stringify(newSessions));
+  };
+
+  const handleClearGraph = () => {
+      if (confirm('Are you sure you want to clear the research graph?')) {
+          setNodes([]);
+          setEdges([]);
+          setSessionName(null);
+      }
   };
 
   const onConnect = useCallback(
@@ -322,10 +401,20 @@ export default function ResearchFlow({
             <Plus className="w-4 h-4" />
         </button>
 
+        {nodes.length > 0 && (
+             <button
+                onClick={handleClearGraph}
+                className="bg-white p-2 rounded-lg shadow-md border border-stone-200 hover:text-red-500 text-stone-600 transition-colors flex items-center gap-2"
+                title="Clear Graph"
+            >
+                <RotateCcw className="w-4 h-4" />
+            </button>
+        )}
+
         <button
             onClick={saveSession}
-            disabled={!sessionName}
-            className={`bg-white p-2 rounded-lg shadow-md border border-stone-200 transition-colors flex items-center gap-2 ${!sessionName ? 'opacity-50 cursor-not-allowed' : 'hover:bg-stone-50 text-stone-600'}`}
+            disabled={nodes.length === 0}
+            className={`bg-white p-2 rounded-lg shadow-md border border-stone-200 transition-colors flex items-center gap-2 ${nodes.length === 0 ? 'opacity-50 cursor-not-allowed' : 'hover:bg-stone-50 text-stone-600'}`}
             title="Save Session"
         >
             <Save className="w-4 h-4" />
@@ -348,16 +437,24 @@ export default function ResearchFlow({
                         <div className="px-4 py-2 text-sm text-stone-400">No saved sessions</div>
                     ) : (
                         savedSessions.map(session => (
-                            <button
+                            <div
                                 key={session.id}
+                                className="w-full px-4 py-2 text-sm text-stone-600 hover:bg-stone-50 flex items-center justify-between group cursor-pointer"
                                 onClick={() => loadSession(session)}
-                                className="w-full text-left px-4 py-2 text-sm text-stone-600 hover:bg-stone-50 flex items-center justify-between group"
                             >
-                                <span className="truncate">{session.name}</span>
-                                <span className="text-xs text-stone-400 group-hover:text-stone-500">
-                                    {new Date(session.timestamp).toLocaleDateString()}
-                                </span>
-                            </button>
+                                <div className="flex flex-col overflow-hidden">
+                                    <span className="truncate font-medium">{session.name}</span>
+                                    <span className="text-xs text-stone-400">
+                                        {new Date(session.timestamp).toLocaleDateString()}
+                                    </span>
+                                </div>
+                                <button 
+                                    onClick={(e) => deleteSession(session.id, e)}
+                                    className="p-1 text-stone-400 hover:text-red-500 hover:bg-red-50 rounded opacity-0 group-hover:opacity-100 transition-all"
+                                >
+                                    <Trash2 size={14} />
+                                </button>
+                            </div>
                         ))
                     )}
                 </div>
@@ -365,7 +462,7 @@ export default function ResearchFlow({
         </div>
       </div>
       <ReactFlow
-        nodes={nodes}
+        nodes={nodesWithHandlers}
         edges={edges}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}

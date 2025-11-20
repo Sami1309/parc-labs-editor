@@ -135,7 +135,7 @@ async function fetchYouTubeTrends(query?: string, pageToken?: string, semanticFi
             description: item.snippet.description || '',
             outlierScore: parseFloat(outlierScore.toFixed(2))
         };
-    });
+    }).filter(v => parseInt(v.viewCount) >= 1000); // Filter out videos with less than 1000 views
 
     // Semantic Filtering
     if (semanticFilter) {
@@ -225,15 +225,14 @@ async function generateImage(prompt: string): Promise<string | null> {
 
     try {
         const ai = new GoogleGenAI({ apiKey });
-        // Use the model ID that was working in the other endpoint
-        const model = 'gemini-2.0-flash-exp'; 
+        const model = 'gemini-2.5-flash-image'; 
 
-        const response = await ai.models.generateContent({
+        const response = await ai.models.generateContentStream({
             model,
             contents: [
                 {
                     role: 'user',
-                    parts: [{ text: `Generate a thumbnail image for: ${prompt}` }],
+                    parts: [{ text: prompt }],
                 }
             ],
              config: {
@@ -242,11 +241,20 @@ async function generateImage(prompt: string): Promise<string | null> {
             },
         });
 
-        const candidate = response.response?.candidates?.[0];
-        const part = candidate?.content?.parts?.[0];
+        let base64Image = null;
+        let mimeType = 'image/png';
+
+        for await (const chunk of response) {
+            if (chunk.candidates?.[0]?.content?.parts?.[0]?.inlineData) {
+                const inlineData = chunk.candidates[0].content.parts[0].inlineData;
+                base64Image = inlineData.data;
+                mimeType = inlineData.mimeType || 'image/png';
+                break; 
+            }
+        }
         
-        if (part?.inlineData) {
-            return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+        if (base64Image) {
+            return `data:${mimeType};base64,${base64Image}`;
         }
         
         return null;
@@ -275,11 +283,13 @@ export async function POST(req: Request) {
       const contextPrompt = likedHooks && likedHooks.length > 0 
         ? `The user liked these previously generated hooks: 
            ${JSON.stringify(likedHooks.map((h: any) => h.title))}
-           Generate similar but unique variations.`
+           
+           Generate new variations that follow the style/angle of these liked hooks, but make them significantly more CREATIVE, DYNAMIC, and INTERESTING. 
+           Do not just copy them. Evolve the concepts to be even more viral.`
         : 'Generate 1 unique hook concept.';
 
-      // Generate 3 hooks in parallel
-      const promises = Array(3).fill(null).map(async () => {
+      // Generate 10 hooks in parallel
+      const promises = Array(10).fill(null).map(async () => {
         const { object: result } = await generateObject({
             model: google('models/gemini-3-pro-preview'),
             schema: z.object({
@@ -329,6 +339,25 @@ export async function POST(req: Request) {
         return new Response(JSON.stringify({ 
             images: images.filter(Boolean) // Return valid images
         }), { headers: { 'Content-Type': 'application/json' } });
+    }
+
+    if (action === 'analyze_hook') {
+         const { title, hook } = await req.json();
+         const { object: analysis } = await generateObject({
+            model: google('models/gemini-3-pro-preview'),
+            schema: z.object({
+                score: z.number().min(0).max(10),
+                feedback: z.string(),
+                improvementSuggestion: z.string()
+            }),
+            prompt: `Rate this YouTube video hook and title on a scale of 1-10 for virality and click-through rate.
+            Title: ${title}
+            Hook: ${hook}
+            
+            Provide concise feedback and one concrete suggestion to improve it.`
+         });
+         
+         return new Response(JSON.stringify(analysis), { headers: { 'Content-Type': 'application/json' } });
     }
 
     return new Response(JSON.stringify({ error: 'Invalid action' }), { status: 400 });

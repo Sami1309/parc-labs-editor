@@ -32,7 +32,7 @@ interface YouTubeVideo {
   outlierScore?: number; // (Video Views) / (Average Channel Views)
 }
 
-async function fetchYouTubeTrends(query?: string, pageToken?: string, semanticFilter?: string, isOutlierMode: boolean = false) {
+async function fetchYouTubeTrends(query?: string, pageToken?: string, semanticFilter?: string, isOutlierMode: boolean = false, publishedAfter?: string) {
   if (!YOUTUBE_API_KEY) {
     console.warn('YOUTUBE_API_KEY is missing. Returning mock data.');
     return { videos: getMockVideos(), nextPageToken: null };
@@ -49,6 +49,7 @@ async function fetchYouTubeTrends(query?: string, pageToken?: string, semanticFi
       // Search for videos
       let searchUrl = `${YOUTUBE_BASE_URL}/search?part=snippet&type=video&q=${encodeURIComponent(query)}&maxResults=${fetchLimit}&key=${YOUTUBE_API_KEY}`;
       if (pageToken) searchUrl += `&pageToken=${pageToken}`;
+      if (publishedAfter) searchUrl += `&publishedAfter=${publishedAfter}`;
       
       const searchRes = await fetch(searchUrl);
       const searchData = await searchRes.json();
@@ -67,13 +68,38 @@ async function fetchYouTubeTrends(query?: string, pageToken?: string, semanticFi
 
     } else {
       // Get most popular
-      let popularUrl = `${YOUTUBE_BASE_URL}/videos?part=snippet,statistics&chart=mostPopular&regionCode=US&maxResults=${fetchLimit}&key=${YOUTUBE_API_KEY}`;
-      if (pageToken) popularUrl += `&pageToken=${pageToken}`;
+      // Note: chart=mostPopular doesn't strictly support publishedAfter filter in the same way search does.
+      // It just gives popular videos now.
+      // If we need recency for "trends" without a query, we might need to use search with order=viewCount or date instead.
+      // However, 'chart=mostPopular' is usually what users mean by "Trends".
+      // Let's stick to popular unless a specific date filter is requested, then switch to search.
+      
+      if (publishedAfter && !query) {
+         // Switch to search to support date filtering
+         let searchUrl = `${YOUTUBE_BASE_URL}/search?part=snippet&type=video&order=viewCount&maxResults=${fetchLimit}&key=${YOUTUBE_API_KEY}&publishedAfter=${publishedAfter}`;
+         if (pageToken) searchUrl += `&pageToken=${pageToken}`;
 
-      const popularRes = await fetch(popularUrl);
-      const popularData = await popularRes.json();
-      items = popularData.items || [];
-      nextPageToken = popularData.nextPageToken;
+         const searchRes = await fetch(searchUrl);
+         const searchData = await searchRes.json();
+         
+         if (!searchData.items) return { videos: [], nextPageToken: null };
+         nextPageToken = searchData.nextPageToken;
+
+         const videoIds = searchData.items.map((item: any) => item.id.videoId).join(',');
+         const videosUrl = `${YOUTUBE_BASE_URL}/videos?part=snippet,statistics&id=${videoIds}&key=${YOUTUBE_API_KEY}`;
+         const videosRes = await fetch(videosUrl);
+         const videosData = await videosRes.json();
+         items = videosData.items;
+
+      } else {
+          let popularUrl = `${YOUTUBE_BASE_URL}/videos?part=snippet,statistics&chart=mostPopular&regionCode=US&maxResults=${fetchLimit}&key=${YOUTUBE_API_KEY}`;
+          if (pageToken) popularUrl += `&pageToken=${pageToken}`;
+
+          const popularRes = await fetch(popularUrl);
+          const popularData = await popularRes.json();
+          items = popularData.items || [];
+          nextPageToken = popularData.nextPageToken;
+      }
     }
 
     // Enrich with channel stats for analytics and outlier score
@@ -94,12 +120,7 @@ async function fetchYouTubeTrends(query?: string, pageToken?: string, semanticFi
         const channelViewCount = parseInt(item.channelStatistics?.viewCount || '0');
         const channelVideoCount = parseInt(item.channelStatistics?.videoCount || '1');
         
-        // Calculate average views for the channel (Global Average)
-        // Note: This is a rough approximation. A better one would be "recent average", but requires more API calls.
         const averageChannelViews = channelVideoCount > 0 ? channelViewCount / channelVideoCount : 0;
-        
-        // Outlier Score: How many times better than the average?
-        // Avoid division by zero. If average is very low, score might be huge, cap it or handle it.
         const outlierScore = averageChannelViews > 100 ? (viewCount / averageChannelViews) : 1;
 
         return {
@@ -119,7 +140,6 @@ async function fetchYouTubeTrends(query?: string, pageToken?: string, semanticFi
     // Semantic Filtering
     if (semanticFilter) {
         const lowerFilter = semanticFilter.toLowerCase();
-        
         if (lowerFilter.includes('no face') || lowerFilter.includes('faceless')) {
             videos = videos.filter(v => {
                 const text = (v.title + ' ' + v.description).toLowerCase();
@@ -141,7 +161,7 @@ async function fetchYouTubeTrends(query?: string, pageToken?: string, semanticFi
     }
 
     // Slice for pagination
-    const pageSize = isOutlierMode ? 50 : 9; // Show more for graph
+    const pageSize = isOutlierMode ? 50 : 9; 
     return { videos: videos.slice(0, pageSize), nextPageToken };
 
   } catch (error) {
@@ -239,10 +259,10 @@ async function generateImage(prompt: string): Promise<string | null> {
 
 export async function POST(req: Request) {
   try {
-    const { action, query, video, likedHooks, pageToken, semanticFilter, concept, isOutlierMode } = await req.json();
+    const { action, query, video, likedHooks, pageToken, semanticFilter, concept, isOutlierMode, publishedAfter } = await req.json();
 
     if (action === 'fetch_trends') {
-      const result = await fetchYouTubeTrends(query, pageToken, semanticFilter, isOutlierMode);
+      const result = await fetchYouTubeTrends(query, pageToken, semanticFilter, isOutlierMode, publishedAfter);
       return new Response(JSON.stringify(result), { headers: { 'Content-Type': 'application/json' } });
     }
 

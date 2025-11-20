@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Sparkles, RefreshCw, Play, Search, ThumbsUp, Loader2, Check, X, Image as ImageIcon, ArrowLeft, Plus, BarChart2, TrendingUp, Activity, Eye, Heart, Users } from 'lucide-react';
+import { Sparkles, RefreshCw, Play, Search, ThumbsUp, Loader2, Check, X, Image as ImageIcon, ArrowLeft, Plus, BarChart2, TrendingUp, Activity, Eye, Heart, Users, Calendar, Clock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card } from '@/components/ui/card';
@@ -36,23 +36,42 @@ interface HookGeneratorProps {
   onStartResearch?: (data: { title: string, hook: string, image?: string }) => void;
 }
 
+// Recency options
+const RECENCY_OPTIONS = [
+    { label: 'All Time', value: '' },
+    { label: 'Last 6 Months', value: '6m' },
+    { label: 'Last Month', value: '1m' },
+    { label: 'Last Week', value: '1w' },
+];
+
 export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
   const [activeTab, setActiveTab] = useState<'trends' | 'outliers'>('trends');
   const [isLoading, setIsLoading] = useState(false);
   const [videos, setVideos] = useState<TrendingVideo[]>([]);
   const [nextPageToken, setNextPageToken] = useState<string | null>(null);
   const [selectedVideo, setSelectedVideo] = useState<TrendingVideo | null>(null);
-  const [previewVideo, setPreviewVideo] = useState<TrendingVideo | null>(null); // New state for modal
+  const [previewVideo, setPreviewVideo] = useState<TrendingVideo | null>(null); 
   const [generatedHooks, setGeneratedHooks] = useState<HookIdea[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [filter, setFilter] = useState<string>('');
-  
-  // For graph scaling
+  const [recency, setRecency] = useState<string>(''); // '' | '6m' | '1m' | '1w'
+
   const containerRef = useRef<HTMLDivElement>(null);
+
+  const getPublishedAfterDate = (period: string) => {
+      if (!period) return undefined;
+      const date = new Date();
+      if (period === '1w') date.setDate(date.getDate() - 7);
+      if (period === '1m') date.setMonth(date.getMonth() - 1);
+      if (period === '6m') date.setMonth(date.getMonth() - 6);
+      return date.toISOString();
+  };
 
   const fetchTrends = async (token?: string | null, reset = false) => {
     setIsLoading(true);
     try {
+      const publishedAfter = getPublishedAfterDate(recency);
+      
       const res = await fetch('/api/hooks', {
         method: 'POST',
         body: JSON.stringify({ 
@@ -60,7 +79,8 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
             query: searchQuery, 
             pageToken: token,
             semanticFilter: filter,
-            isOutlierMode: activeTab === 'outliers'
+            isOutlierMode: activeTab === 'outliers',
+            publishedAfter
         }),
         headers: { 'Content-Type': 'application/json' }
       });
@@ -76,10 +96,16 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
     }
   };
 
+  // Re-fetch when recency changes (and we are in a view that has data)
+  useEffect(() => {
+      if (videos.length > 0 || searchQuery) {
+          fetchTrends(null, true);
+      }
+  }, [recency]);
+
   const generateHooks = async (video: TrendingVideo, useLiked = false) => {
     setIsLoading(true);
     if (!useLiked) setSelectedVideo(video);
-    // Close preview if expanding into full hook generation
     setPreviewVideo(null);
     
     const likedHooks = useLiked ? generatedHooks.filter(h => h.liked) : [];
@@ -174,13 +200,11 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
   };
 
   // --- Outlier Graph Logic ---
-  // Calculate exponential/logarithmic scales for visualization
   const maxViews = Math.max(...videos.map(v => parseInt(v.viewCount) || 0), 1);
   const maxOutlier = Math.max(...videos.map(v => v.outlierScore || 0), 1);
   const minViews = Math.min(...videos.map(v => parseInt(v.viewCount) || 0), maxViews);
   const minOutlier = Math.min(...videos.map(v => v.outlierScore || 0), maxOutlier);
 
-  // Helper for log scale positioning (0-100%)
   const getLogPos = (value: number, min: number, max: number) => {
       if (value <= 0) return 0;
       const logVal = Math.log(value);
@@ -194,7 +218,7 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
   return (
     <div className="h-full flex flex-col bg-stone-50 overflow-hidden">
       {/* Header */}
-      <div className="p-6 border-b border-stone-200 bg-white space-y-4">
+      <div className="p-6 border-b border-stone-200 bg-white space-y-4 z-20 relative shadow-sm">
         <div className="flex items-center justify-between">
             <div>
                 <h1 className="text-2xl font-bold text-stone-900 mb-1">Hook & Trend Generator</h1>
@@ -233,28 +257,47 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
                         {activeTab === 'outliers' ? 'Analyze' : 'Find Trends'}
                     </Button>
                 </div>
-                <div className="flex gap-2">
-                     <Button 
-                        variant={filter === '' ? 'secondary' : 'ghost'} 
-                        size="sm" 
-                        onClick={() => { setFilter(''); fetchTrends(null, true); }}
-                    >
-                        All
-                     </Button>
-                     <Button 
-                        variant={filter === 'no face' ? 'secondary' : 'ghost'} 
-                        size="sm" 
-                        onClick={() => { setFilter('no face'); fetchTrends(null, true); }}
-                    >
-                        No Face / Faceless
-                     </Button>
-                     <Button 
-                        variant={filter === 'infographic' ? 'secondary' : 'ghost'} 
-                        size="sm" 
-                        onClick={() => { setFilter('infographic'); fetchTrends(null, true); }}
-                    >
-                        Data / Infographic
-                     </Button>
+                <div className="flex flex-wrap items-center gap-4">
+                     <div className="flex gap-2">
+                         <Button 
+                            variant={filter === '' ? 'secondary' : 'ghost'} 
+                            size="sm" 
+                            onClick={() => { setFilter(''); fetchTrends(null, true); }}
+                        >
+                            All Types
+                         </Button>
+                         <Button 
+                            variant={filter === 'no face' ? 'secondary' : 'ghost'} 
+                            size="sm" 
+                            onClick={() => { setFilter('no face'); fetchTrends(null, true); }}
+                        >
+                            No Face / Faceless
+                         </Button>
+                         <Button 
+                            variant={filter === 'infographic' ? 'secondary' : 'ghost'} 
+                            size="sm" 
+                            onClick={() => { setFilter('infographic'); fetchTrends(null, true); }}
+                        >
+                            Data / Infographic
+                         </Button>
+                     </div>
+                     
+                     <div className="h-6 w-px bg-stone-200 mx-2" />
+                     
+                     <div className="flex gap-2">
+                         {RECENCY_OPTIONS.map((opt) => (
+                             <Button
+                                key={opt.value}
+                                variant={recency === opt.value ? 'secondary' : 'ghost'}
+                                size="sm"
+                                onClick={() => setRecency(opt.value)}
+                                className={cn(recency === opt.value && "bg-stone-200")}
+                             >
+                                {recency === opt.value && <Calendar size={14} className="mr-1.5" />}
+                                {opt.label}
+                             </Button>
+                         ))}
+                     </div>
                 </div>
             </div>
         )}
@@ -341,15 +384,15 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
                                 {/* Bubbles */}
                                 <AnimatePresence>
                                     {videos.map((video) => {
-                                        // Use Logarithmic scale for better distribution
+                                        // Use Logarithmic scale
                                         const xRaw = getLogPos(video.outlierScore || 1, minOutlier, maxOutlier);
                                         const yRaw = getLogPos(parseInt(video.viewCount), minViews, maxViews);
                                         
-                                        // Clamp to ensure they stay within the visual box (adding padding)
-                                        const x = Math.min(Math.max(xRaw, 2), 98);
-                                        const y = Math.min(Math.max(yRaw, 2), 98);
+                                        // Inset clamping to ensure tooltips and bubbles stay visible (5% to 95% instead of 2-98)
+                                        const x = Math.min(Math.max(xRaw, 5), 95);
+                                        const y = Math.min(Math.max(yRaw, 5), 95);
                                         
-                                        const size = 40 + Math.min((parseInt(video.viewCount) / maxViews) * 60, 60); // Size between 40px and 100px
+                                        const size = 40 + Math.min((parseInt(video.viewCount) / maxViews) * 60, 60);
 
                                         return (
                                             <motion.div
@@ -370,13 +413,15 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
                                                     <img src={video.thumbnail} className="w-full h-full object-cover" alt={video.title} />
                                                 </div>
                                                 
-                                                {/* Tooltip - Smart Positioning */}
+                                                {/* Tooltip - Responsive Positioning */}
                                                 <div className={cn(
-                                                    "absolute left-1/2 -translate-x-1/2 w-56 bg-stone-900 text-white text-xs p-3 rounded-lg shadow-xl pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity z-50 flex flex-col gap-1",
-                                                    y > 50 ? "bottom-full mb-2" : "top-full mt-2" // Flip based on vertical position
+                                                    "absolute left-1/2 -translate-x-1/2 w-64 bg-stone-900/95 backdrop-blur-sm text-white text-xs p-3 rounded-lg shadow-xl pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity z-50 flex flex-col gap-1",
+                                                    y > 60 ? "bottom-full mb-3" : "top-full mt-3",
+                                                    x < 20 ? "left-0 translate-x-0" : "", // Adjust if too far left
+                                                    x > 80 ? "right-0 left-auto translate-x-0" : "" // Adjust if too far right
                                                 )}>
                                                     <p className="font-bold line-clamp-2 text-sm">{video.title}</p>
-                                                    <div className="flex justify-between text-stone-400 mt-1">
+                                                    <div className="flex justify-between text-stone-300 mt-1 border-t border-white/10 pt-2">
                                                         <span>{parseInt(video.viewCount).toLocaleString()} views</span>
                                                         <span className="text-green-400 font-bold">{video.outlierScore?.toFixed(1)}x Outlier</span>
                                                     </div>
@@ -551,9 +596,10 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
                     onClick={() => setPreviewVideo(null)}
                 >
                     <motion.div 
-                        initial={{ scale: 0.95, opacity: 0 }}
-                        animate={{ scale: 1, opacity: 1 }}
-                        exit={{ scale: 0.95, opacity: 0 }}
+                        initial={{ scale: 0.95, opacity: 0, y: 20 }}
+                        animate={{ scale: 1, opacity: 1, y: 0 }}
+                        exit={{ scale: 0.95, opacity: 0, y: 20 }}
+                        transition={{ type: "spring", duration: 0.3 }}
                         className="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col"
                         onClick={(e) => e.stopPropagation()}
                     >
@@ -570,7 +616,7 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
                             />
                             <button 
                                 onClick={() => setPreviewVideo(null)}
-                                className="absolute top-4 right-4 p-2 bg-black/50 hover:bg-black/70 text-white rounded-full transition-colors"
+                                className="absolute top-4 right-4 p-2 bg-black/50 hover:bg-black/70 text-white rounded-full transition-colors z-10"
                             >
                                 <X size={20} />
                             </button>
@@ -595,6 +641,9 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
                                         <Activity size={16} /> {previewVideo.outlierScore}x Outlier
                                     </span>
                                 )}
+                                <span className="flex items-center gap-1 text-stone-500">
+                                    <Calendar size={16} /> {new Date(previewVideo.publishedAt).toLocaleDateString()}
+                                </span>
                             </div>
                             
                             <div className="bg-stone-50 p-4 rounded-lg mb-6 border border-stone-100">

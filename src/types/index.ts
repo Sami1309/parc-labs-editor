@@ -44,7 +44,7 @@ export interface Message {
 export interface SavedStoryboardSession {
   id: string;
   name: string;
-  selectedNodeId: string | null;
+  selectedNodeIds: string[];
   messages: Message[];
   storyboard: StoryboardScene[];
   timestamp: number;

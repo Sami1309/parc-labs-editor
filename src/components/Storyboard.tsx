@@ -2,8 +2,8 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { Node } from '@xyflow/react';
-import { Send, Sparkles, Image as ImageIcon, FileText, Loader2, Save, Layout, Trash2, FolderOpen, ChevronDown, Maximize2 } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { Send, Sparkles, Image as ImageIcon, FileText, Loader2, Save, Layout, Trash2, FolderOpen, ChevronDown, Maximize2, CheckCircle2, PlusCircle } from 'lucide-react';
+import { motion } from 'framer-motion';
 import ReactMarkdown from 'react-markdown';
 import { StoryboardScene, Message, SavedStoryboardSession } from '@/types';
 
@@ -12,7 +12,7 @@ interface StoryboardProps {
 }
 
 export function Storyboard({ researchNodes }: StoryboardProps) {
-  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
   const [storyboard, setStoryboard] = useState<StoryboardScene[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
   const [generationStep, setGenerationStep] = useState<string | null>(null);
@@ -22,7 +22,7 @@ export function Storyboard({ researchNodes }: StoryboardProps) {
     {
       id: 'welcome',
       role: 'assistant',
-      content: "Hello! I'm your storyboard assistant. I can help you turn your research into a compelling video narrative.\n\nPlease select a research finding from the right to get started."
+      content: "Hello! I'm your storyboard assistant. I can help you turn your research into a compelling video narrative.\n\nI've analyzed your research. You can add more findings to the context from the right panel."
     }
   ]);
   const [input, setInput] = useState('');
@@ -35,12 +35,37 @@ export function Storyboard({ researchNodes }: StoryboardProps) {
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Filter relevant nodes (exclude start node)
-  const relevantNodes = researchNodes.filter(n => n.type === 'result');
+  // Filter relevant nodes (results and start node)
+  const relevantNodes = researchNodes.filter(n => n.type === 'result' || n.type === 'start');
+  const startNode = researchNodes.find(n => n.type === 'start');
 
   // Context for the chat
-  const selectedNode = researchNodes.find(n => n.id === selectedNodeId);
+  const selectedNodes = researchNodes.filter(n => selectedNodeIds.includes(n.id));
   
+  // Initialize with Start Node if available and no selection made yet
+  useEffect(() => {
+    if (startNode && selectedNodeIds.length === 0 && messages.length === 1) {
+        setSelectedNodeIds([startNode.id]);
+        
+        // Add the "modal/rectangle" message for the start node
+        const initialContextMsg: Message = {
+            id: 'initial-context',
+            role: 'assistant',
+            content: `**Starting Point: ${startNode.data.label || 'Research Topic'}**\n\n${startNode.data.content || 'Initial research hook'}`
+        };
+        
+        // Insert after welcome message
+        setMessages(prev => {
+            if (prev.find(m => m.id === 'initial-context')) return prev;
+            return [prev[0], initialContextMsg, ...prev.slice(1)];
+        });
+
+        if (!sessionName) {
+            setSessionName(`Storyboard: ${(startNode.data.label as string) || 'Untitled'}`);
+        }
+    }
+  }, [startNode, researchNodes]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Auto-scroll to bottom
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -72,15 +97,18 @@ export function Storyboard({ researchNodes }: StoryboardProps) {
     setIsLoading(true);
 
     try {
+        // Construct context from all selected nodes
+        const contextData = selectedNodes.length > 0 
+            ? selectedNodes.map(node => `Node: "${node.data.title || node.data.label}"\nContent: ${node.data.content || ''}`).join('\n\n')
+            : "No specific research nodes selected.";
+
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           messages: [...messages, userMsgObj],
           data: {
-            context: selectedNode 
-                ? `Selected Research Node: "${selectedNode.data.title as string}"\nContent: ${selectedNode.data.content as string}\n\nUser is refining the storyboard idea.`
-                : `Available Research Topics:\n${relevantNodes.map(n => `- ${n.data.title as string}`).join('\n')}`
+            context: `Current Selected Context:\n${contextData}\n\nUser is refining the storyboard idea.`
           }
         })
       });
@@ -123,19 +151,22 @@ export function Storyboard({ researchNodes }: StoryboardProps) {
     sendMessage(input);
   };
 
-  const handleNodeSelect = (nodeId: string) => {
-    setSelectedNodeId(nodeId);
-    const node = researchNodes.find(n => n.id === nodeId);
-    // Trigger a message from user about selection
-    sendMessage(`I want to build a storyboard based on: "${node?.data.title as string}". What are some interesting angles or formats for this?`);
-    // Generate a default session name based on node title
-    if (!sessionName) {
-        setSessionName(`Storyboard: ${node?.data.title as string}`.substring(0, 30) + '...');
-    }
+  const toggleNodeSelection = (nodeId: string) => {
+    setSelectedNodeIds(prev => {
+        const isSelected = prev.includes(nodeId);
+        if (isSelected) {
+            return prev.filter(id => id !== nodeId);
+        } else {
+            return [...prev, nodeId];
+        }
+    });
   };
 
   const handleGenerateStoryboard = async (mode: 'standard' | 'expand' = 'standard') => {
-    if (!selectedNodeId) return;
+    if (selectedNodeIds.length === 0) {
+        alert("Please select at least one research node to generate a storyboard.");
+        return;
+    }
     setIsGenerating(true);
     setGenerationStep(mode === 'expand' ? 'Expanding narrative...' : 'Initializing generation...');
     
@@ -150,8 +181,9 @@ export function Storyboard({ researchNodes }: StoryboardProps) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           messages,
-          selectedNode: researchNodes.find(n => n.id === selectedNodeId)?.data,
-          mode // Pass the mode to the API
+          selectedNode: selectedNodes[0]?.data, // Pass the primary node
+          additionalContext: selectedNodes.map(n => n.data).slice(1),
+          mode 
         })
       });
 
@@ -159,10 +191,17 @@ export function Storyboard({ researchNodes }: StoryboardProps) {
       
       if (response.ok) {
         const data = await response.json();
-        setStoryboard(data.scenes);
+        if (data.scenes && Array.isArray(data.scenes)) {
+             setStoryboard(data.scenes);
+        } else {
+             throw new Error('Invalid response format: ' + JSON.stringify(data));
+        }
+      } else {
+        throw new Error(`Generation failed with status: ${response.status}`);
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error("Error generating storyboard", e);
+      alert(`Failed to generate storyboard: ${e.message || 'Unknown error'}`);
     } finally {
       setIsGenerating(false);
       setGenerationStep(null);
@@ -174,7 +213,7 @@ export function Storyboard({ researchNodes }: StoryboardProps) {
       const newSession: SavedStoryboardSession = {
           id: Date.now().toString(),
           name: nameToUse,
-          selectedNodeId,
+          selectedNodeIds,
           messages,
           storyboard,
           timestamp: Date.now()
@@ -188,7 +227,11 @@ export function Storyboard({ researchNodes }: StoryboardProps) {
   };
 
   const loadSession = (session: SavedStoryboardSession) => {
-      setSelectedNodeId(session.selectedNodeId);
+      // Handle legacy sessions with selectedNodeId
+      const legacySession = session as any;
+      const nodesToSelect = session.selectedNodeIds || (legacySession.selectedNodeId ? [legacySession.selectedNodeId] : []);
+      
+      setSelectedNodeIds(nodesToSelect);
       setMessages(session.messages);
       setStoryboard(session.storyboard);
       setSessionName(session.name);
@@ -197,7 +240,7 @@ export function Storyboard({ researchNodes }: StoryboardProps) {
 
   const clearSession = () => {
       if (confirm('Are you sure you want to clear the current session? Unsaved changes will be lost.')) {
-          setSelectedNodeId(null);
+          setSelectedNodeIds([]);
           setMessages([{
               id: 'welcome',
               role: 'assistant',
@@ -260,7 +303,7 @@ export function Storyboard({ researchNodes }: StoryboardProps) {
 
                 <button 
                     onClick={saveSession}
-                    disabled={!selectedNodeId} // Can't save empty session easily
+                    disabled={selectedNodeIds.length === 0}
                     className="p-1.5 text-stone-400 hover:text-purple-600 hover:bg-purple-50 rounded-md transition-colors disabled:opacity-30"
                     title="Save Session"
                 >
@@ -275,11 +318,25 @@ export function Storyboard({ researchNodes }: StoryboardProps) {
               <div className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed shadow-sm ${
                 m.role === 'user' 
                   ? 'bg-stone-900 text-white rounded-tr-none' 
-                  : 'bg-white text-stone-800 rounded-tl-none border border-stone-100'
+                  : m.id === 'initial-context'
+                    ? 'bg-purple-50 text-stone-800 rounded-tl-none border border-purple-100 w-full'
+                    : 'bg-white text-stone-800 rounded-tl-none border border-stone-100'
               }`}>
-                <div className="prose prose-sm max-w-none dark:prose-invert prose-p:leading-relaxed prose-pre:bg-stone-800 prose-pre:text-stone-100">
-                    <ReactMarkdown>{m.content}</ReactMarkdown>
-                </div>
+                 {m.id === 'initial-context' ? (
+                    <div className="flex flex-col gap-2">
+                        <div className="flex items-center gap-2 text-purple-600 font-medium border-b border-purple-100 pb-2 mb-1">
+                            <FileText className="w-4 h-4" />
+                            <span>Research Context</span>
+                        </div>
+                        <div className="prose prose-sm max-w-none dark:prose-invert prose-p:leading-relaxed prose-pre:bg-stone-800 prose-pre:text-stone-100">
+                            <ReactMarkdown>{m.content}</ReactMarkdown>
+                        </div>
+                    </div>
+                 ) : (
+                    <div className="prose prose-sm max-w-none dark:prose-invert prose-p:leading-relaxed prose-pre:bg-stone-800 prose-pre:text-stone-100">
+                        <ReactMarkdown>{m.content}</ReactMarkdown>
+                    </div>
+                 )}
               </div>
             </div>
           ))}
@@ -300,7 +357,7 @@ export function Storyboard({ researchNodes }: StoryboardProps) {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               placeholder="Type a message..."
-              className="w-full bg-stone-50 border border-stone-200 rounded-xl pl-4 pr-12 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500/50 transition-all placeholder-stone-400"
+              className="w-full bg-stone-50 border border-stone-200 rounded-xl pl-4 pr-12 py-3 text-sm text-stone-900 focus:outline-none focus:ring-2 focus:ring-purple-500/50 transition-all placeholder-stone-400"
             />
             <button 
               type="submit"
@@ -318,113 +375,109 @@ export function Storyboard({ researchNodes }: StoryboardProps) {
         <div className="p-4 border-b border-stone-200 bg-white flex items-center justify-between shadow-sm z-10">
             <h2 className="font-semibold text-stone-800 flex items-center gap-2">
               <Layout className="w-4 h-4 text-stone-500" />
-              {selectedNodeId ? 'Storyboard Workspace' : 'Select Research'}
+              Storyboard Workspace
+              <span className="text-xs font-normal text-stone-400 ml-2">
+                ({selectedNodeIds.length} selected)
+              </span>
             </h2>
-            {selectedNodeId && (
-                <div className="flex items-center gap-2">
-                   <button 
-                     onClick={() => setSelectedNodeId(null)}
-                     className="text-xs text-stone-500 hover:text-stone-800 px-3 py-1.5 rounded-lg hover:bg-stone-100 transition-colors"
-                   >
-                     Change Research
-                   </button>
-                   {storyboard.length > 0 && (
-                       <button
-                            onClick={() => handleGenerateStoryboard('expand')}
-                            disabled={isGenerating}
-                            className="bg-stone-100 text-stone-700 px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-stone-200 transition-colors flex items-center gap-2 disabled:opacity-50 border border-stone-200"
-                        >
-                            <Maximize2 className="w-3 h-3" />
-                            Expand Story
-                        </button>
-                   )}
-                   <button
-                     onClick={() => handleGenerateStoryboard('standard')}
-                     disabled={isGenerating}
-                     className="bg-purple-600 text-white px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-purple-700 transition-colors flex items-center gap-2 disabled:opacity-50 shadow-sm shadow-purple-200"
-                   >
-                     {isGenerating ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
-                     {isGenerating ? 'Generating...' : 'Generate Storyboard'}
-                   </button>
-                </div>
-            )}
+            <div className="flex items-center gap-2">
+                {storyboard.length > 0 && (
+                    <button
+                        onClick={() => handleGenerateStoryboard('expand')}
+                        disabled={isGenerating}
+                        className="bg-stone-100 text-stone-700 px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-stone-200 transition-colors flex items-center gap-2 disabled:opacity-50 border border-stone-200"
+                    >
+                        <Maximize2 className="w-3 h-3" />
+                        Expand Story
+                    </button>
+                )}
+                <button
+                    onClick={() => handleGenerateStoryboard('standard')}
+                    disabled={isGenerating || selectedNodeIds.length === 0}
+                    className="bg-purple-600 text-white px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-purple-700 transition-colors flex items-center gap-2 disabled:opacity-50 shadow-sm shadow-purple-200"
+                >
+                    {isGenerating ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
+                    {isGenerating ? 'Generating...' : 'Generate Storyboard'}
+                </button>
+            </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-8 relative">
-           {/* Generation Overlay */}
-           <AnimatePresence>
-             {isGenerating && (
-                <motion.div 
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    className="absolute inset-0 bg-white/80 backdrop-blur-sm z-20 flex flex-col items-center justify-center"
-                >
-                    <div className="bg-white p-8 rounded-2xl shadow-xl border border-stone-100 flex flex-col items-center max-w-md w-full">
-                        <div className="relative w-16 h-16 mb-6">
+        <div className="flex-1 overflow-y-auto p-6 relative">
+           <div className="flex gap-6 h-full">
+             {/* Available Research / Context Selection */}
+             <div className="w-1/3 min-w-[250px] overflow-y-auto pr-2 space-y-3">
+                <h3 className="text-xs font-bold text-stone-400 uppercase tracking-wider mb-4 sticky top-0 bg-stone-50 py-2 z-10">
+                    Available Research
+                </h3>
+                {relevantNodes.length === 0 ? (
+                    <div className="text-center py-10 text-stone-400 bg-white rounded-lg border border-stone-200 border-dashed">
+                        <FileText className="w-8 h-8 mx-auto mb-2 opacity-20" />
+                        <p className="text-xs">No findings yet</p>
+                    </div>
+                ) : (
+                    relevantNodes.map(node => {
+                        const isSelected = selectedNodeIds.includes(node.id);
+                        const data = node.data as any;
+                        return (
+                            <div 
+                                key={node.id}
+                                className={`bg-white p-2 rounded-lg border transition-all group ${
+                                    isSelected 
+                                        ? 'border-purple-500 ring-1 ring-purple-100 shadow-sm' 
+                                        : 'border-stone-200 hover:border-stone-300'
+                                }`}
+                            >
+                                <div className="flex justify-between items-start gap-2 mb-1">
+                                    <span className={`text-[8px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full ${
+                                        node.type === 'start' ? 'bg-blue-50 text-blue-600' : 'bg-purple-50 text-purple-600'
+                                    }`}>
+                                        {node.type === 'start' ? 'HOOK' : (data.type || 'finding')}
+                                    </span>
+                                    <button
+                                        onClick={() => toggleNodeSelection(node.id)}
+                                        className={`text-[10px] font-medium px-1.5 py-0.5 rounded-md transition-colors flex items-center gap-1 ${
+                                            isSelected
+                                                ? 'bg-purple-100 text-purple-700 hover:bg-purple-200'
+                                                : 'bg-stone-100 text-stone-600 hover:bg-stone-200'
+                                        }`}
+                                    >
+                                        {isSelected ? <CheckCircle2 className="w-3 h-3" /> : <PlusCircle className="w-3 h-3" />}
+                                        {isSelected ? 'Added' : 'Add'}
+                                    </button>
+                                </div>
+                                <h4 className="font-bold text-stone-800 text-xs mb-1 line-clamp-2">
+                                    {data.title || data.label}
+                                </h4>
+                                <p className="text-[10px] text-stone-500 line-clamp-2">
+                                    {data.content}
+                                </p>
+                                {data.imageUrl && (
+                                    <div className="mt-2 h-16 rounded bg-stone-100 overflow-hidden">
+                                        <img src={data.imageUrl} alt="" className="w-full h-full object-cover opacity-90" />
+                                    </div>
+                                )}
+                            </div>
+                        );
+                    })
+                )}
+             </div>
+
+             {/* Storyboard Preview Area */}
+             <div className="flex-1 h-full overflow-y-auto">
+               {isGenerating ? (
+                   <div className="h-full flex flex-col items-center justify-center bg-white/50 backdrop-blur-sm rounded-xl border-2 border-dashed border-purple-200">
+                       <div className="relative w-16 h-16 mb-6">
                             <div className="absolute inset-0 border-4 border-stone-100 rounded-full"></div>
                             <div className="absolute inset-0 border-4 border-purple-500 rounded-full border-t-transparent animate-spin"></div>
                             <Sparkles className="absolute inset-0 m-auto w-6 h-6 text-purple-500 animate-pulse" />
                         </div>
                         <h3 className="text-lg font-bold text-stone-800 mb-2">Creating Storyboard</h3>
-                        <p className="text-stone-500 text-center text-sm mb-6">
+                        <p className="text-stone-500 text-center text-sm max-w-xs animate-pulse">
                             {generationStep || 'Processing...'}
                         </p>
-                        
-                        <div className="w-full bg-stone-100 rounded-full h-1.5 overflow-hidden">
-                            <motion.div 
-                                className="h-full bg-purple-500"
-                                initial={{ width: "0%" }}
-                                animate={{ width: "100%" }}
-                                transition={{ duration: 3, ease: "easeInOut", repeat: Infinity }}
-                            />
-                        </div>
-                    </div>
-                </motion.div>
-             )}
-           </AnimatePresence>
-
-           {!selectedNodeId ? (
-             /* Selection Grid */
-             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 max-w-5xl mx-auto">
-               {relevantNodes.length === 0 ? (
-                 <div className="col-span-full text-center py-20 text-stone-400">
-                   <FileText className="w-12 h-12 mx-auto mb-4 opacity-20" />
-                   <p>No research findings yet. Go back to Research view to discover content.</p>
-                 </div>
-               ) : (
-                 relevantNodes.map(node => (
-                   <motion.button
-                     key={node.id}
-                     onClick={() => handleNodeSelect(node.id)}
-                     whileHover={{ y: -2 }}
-                     className="text-left bg-white p-5 rounded-xl border border-stone-200 shadow-sm hover:shadow-md hover:border-purple-200 transition-all group h-full flex flex-col"
-                   >
-                     <div className="mb-3">
-                       <span className="text-[10px] font-bold uppercase tracking-wider text-purple-500 bg-purple-50 px-2 py-1 rounded-full">
-                         {(node.data.type as string) || 'finding'}
-                       </span>
-                     </div>
-                     <h3 className="font-bold text-stone-800 mb-2 line-clamp-2 group-hover:text-purple-700 transition-colors">
-                       {node.data.title as string}
-                     </h3>
-                     <p className="text-sm text-stone-500 line-clamp-3 mb-4 flex-1">
-                       {node.data.content as string}
-                     </p>
-                     {(node.data.imageUrl as string) && (
-                       <div className="mt-auto pt-4 border-t border-stone-100">
-                         <img src={node.data.imageUrl as string} alt="" className="w-full h-32 object-cover rounded-lg opacity-80 group-hover:opacity-100 transition-opacity" />
-                       </div>
-                     )}
-                   </motion.button>
-                 ))
-               )}
-             </div>
-           ) : (
-             /* Workspace / Generated Storyboard */
-             <div className="max-w-4xl mx-auto">
-               {storyboard.length > 0 ? (
-                 <div className="space-y-8 pb-20">
+                   </div>
+               ) : storyboard.length > 0 ? (
+                 <div className="space-y-6 pb-20">
                     {storyboard.map((scene, idx) => (
                       <motion.div 
                         initial={{ opacity: 0, y: 20 }}
@@ -433,14 +486,14 @@ export function Storyboard({ researchNodes }: StoryboardProps) {
                         key={scene.id || idx} 
                         className="bg-white rounded-xl border border-stone-200 shadow-sm overflow-hidden flex flex-col md:flex-row group hover:shadow-md transition-shadow"
                       >
-                        <div className="md:w-1/3 bg-stone-100 relative min-h-[200px]">
+                        <div className="md:w-1/3 bg-stone-100 relative min-h-[150px]">
                           {scene.image ? (
                              <img src={scene.image} alt="Scene visual" className="w-full h-full object-cover absolute inset-0" />
                           ) : (
                              <div className="absolute inset-0 flex items-center justify-center text-stone-300 bg-stone-50">
                                <div className="text-center p-4">
-                                   <ImageIcon className="w-8 h-8 mx-auto mb-2 opacity-50" />
-                                   <span className="text-xs">No image available</span>
+                                   <ImageIcon className="w-6 h-6 mx-auto mb-2 opacity-50" />
+                                   <span className="text-[10px]">No image</span>
                                </div>
                              </div>
                           )}
@@ -448,12 +501,12 @@ export function Storyboard({ researchNodes }: StoryboardProps) {
                             Scene {idx + 1}
                           </div>
                         </div>
-                        <div className="md:w-2/3 p-6 flex flex-col justify-center">
-                           <div className="prose prose-sm text-stone-600 mb-4">
-                             <p className="whitespace-pre-wrap text-base leading-relaxed">{scene.text}</p>
+                        <div className="md:w-2/3 p-5 flex flex-col justify-center">
+                           <div className="prose prose-sm text-stone-600 mb-3">
+                             <p className="whitespace-pre-wrap text-sm leading-relaxed">{scene.text}</p>
                            </div>
                            {scene.notes && (
-                             <div className="bg-yellow-50 text-yellow-800 text-xs p-3 rounded-lg border border-yellow-100 flex items-start gap-2">
+                             <div className="bg-yellow-50 text-yellow-800 text-[10px] p-2 rounded-lg border border-yellow-100 flex items-start gap-2">
                                <Sparkles className="w-3 h-3 mt-0.5 flex-shrink-0" />
                                <span className="leading-relaxed">{scene.notes}</span>
                              </div>
@@ -463,31 +516,18 @@ export function Storyboard({ researchNodes }: StoryboardProps) {
                     ))}
                  </div>
                ) : (
-                 <div className="text-center py-20">
-                    <div className="w-16 h-16 bg-purple-50 rounded-full flex items-center justify-center mx-auto mb-6 shadow-inner">
-                       <Sparkles className="w-8 h-8 text-purple-400" />
+                 <div className="h-full flex flex-col items-center justify-center text-center text-stone-400 p-8 border-2 border-dashed border-stone-200 rounded-xl bg-stone-50/50">
+                    <div className="w-12 h-12 bg-purple-50 rounded-full flex items-center justify-center mb-4">
+                       <Layout className="w-6 h-6 text-purple-300" />
                     </div>
-                    <h3 className="text-xl font-semibold text-stone-800 mb-2">Drafting Mode</h3>
-                    <p className="text-stone-500 max-w-md mx-auto mb-8 leading-relaxed">
-                      Chat with the assistant to refine the direction for your storyboard. 
-                      When you're ready, click <strong className="text-purple-600 font-medium">Generate Storyboard</strong> in the top right.
+                    <h3 className="text-lg font-semibold text-stone-600 mb-1">Empty Storyboard</h3>
+                    <p className="text-sm max-w-xs mx-auto">
+                        Select research nodes from the left and chat with the assistant to generate your storyboard.
                     </p>
-                    
-                    {selectedNode && (
-                      <div className="bg-white p-6 rounded-xl border border-stone-200 shadow-sm max-w-2xl mx-auto text-left">
-                        <div className="flex items-center gap-2 mb-3">
-                            <span className="text-[10px] font-bold uppercase tracking-wider text-blue-500 bg-blue-50 px-2 py-1 rounded-full">
-                                Active Context
-                            </span>
-                        </div>
-                        <h4 className="font-bold text-stone-800 mb-2 text-lg">{selectedNode.data.title as string}</h4>
-                        <p className="text-stone-600 text-sm leading-relaxed">{selectedNode.data.content as string}</p>
-                      </div>
-                    )}
                  </div>
                )}
              </div>
-           )}
+           </div>
         </div>
       </div>
     </div>

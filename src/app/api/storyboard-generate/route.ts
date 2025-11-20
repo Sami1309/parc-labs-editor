@@ -9,102 +9,145 @@ const exa = new Exa(process.env.EXA_API_KEY || '');
 
 export async function POST(req: Request) {
   try {
-    const { messages, selectedNode, mode = 'standard' } = await req.json();
+    const { messages, selectedNode, additionalContext = [], mode = 'standard' } = await req.json();
 
-    // 1. Extract keywords for asset search from the conversation and context
-    const { object: searchQueries } = await generateObject({
-      model: google('models/gemini-3-pro-preview'),
-      schema: z.object({
-        keywords: z.array(z.string()).describe('3-5 visual keywords or phrases to search for images'),
-      }),
-      prompt: `
-        Based on this research topic: "${selectedNode.title}" 
-        and conversation history: 
-        ${messages.slice(-3).map((m: any) => m.content).join('\n')}
-        
-        Generate 3-5 specific visual keywords to find relevant images/assets for a storyboard.
-      `,
-    });
+    // 1. STRICT LIMITS CONSTANTS
+    const MAX_CONTEXT_NODES = 5;
+    const MAX_NODE_CONTENT_LENGTH = 1500; // chars
+    const MAX_HISTORY_MESSAGES = 5;
+    const MAX_MESSAGE_LENGTH = 500; // chars
+    const MAX_IMAGES = 10;
 
-    // 2. Search for additional assets using Exa
-    let exaImages: string[] = [];
+    // 2. Prepare Context
+    // Combine primary node and additional context, strictly limited
+    const allContext = [selectedNode, ...additionalContext]
+        .filter(Boolean)
+        .slice(0, MAX_CONTEXT_NODES); // Limit number of nodes
+
+    const contextString = allContext.map((c, i) => {
+        const content = typeof c.content === 'string' ? c.content : JSON.stringify(c.content || '');
+        const truncatedContent = content.length > MAX_NODE_CONTENT_LENGTH 
+            ? content.substring(0, MAX_NODE_CONTENT_LENGTH) + '...[truncated]' 
+            : content;
+        return `Finding ${i + 1}: ${c.title || c.label}\nContent: ${truncatedContent}\n`;
+    }).join('\n');
+
+    // 3. Sanitize History
+    const sanitizedHistory = Array.isArray(messages) ? messages
+        .filter((m: any) => m.id !== 'initial-context') 
+        .slice(-MAX_HISTORY_MESSAGES) 
+        .map((m: any) => {
+            const content = typeof m.content === 'string' ? m.content : JSON.stringify(m.content || '');
+            const truncated = content.length > MAX_MESSAGE_LENGTH 
+                ? content.substring(0, MAX_MESSAGE_LENGTH) + '...' 
+                : content;
+            return `${m.role}: ${truncated}`;
+        })
+        .join('\n') : '';
+
+    // 4. Generate Visual Keywords (Text-only prompt, low token usage)
+    let searchQueries: { keywords: string[] } = { keywords: [] };
     try {
-        const searchResults = await Promise.all(
-            searchQueries.keywords.slice(0, 3).map(query => 
-                exa.searchAndContents(query, {
-                    numResults: 2,
-                    type: 'neural',
-                    useAutoprompt: true,
-                })
-            )
-        );
-
-        // Naive extraction of potential image URLs from results (if Exa returns any, or we rely on what we have)
-        // Since Exa text search doesn't always return images directly in standard search, 
-        // we might rely on the previously scraped 'assets' from the research phase if available.
-        // However, if we want *new* assets, we'd typically need an image search API. 
-        // Exa's 'contents' might have OG images.
-        
-        exaImages = searchResults.flatMap(r => r.results.map(res => {
-            // Mock logic to find an image - in reality Exa might not return direct image URLs in 'text' mode easily 
-            // without deeper scraping, but let's assume we check for OG images if available or just skip if none.
-            // Exa currently doesn't natively return a list of "images" in standard search response unless we scrape.
-            // For now, we will try to use what we have or placeholders.
-            return null; 
-        })).filter(Boolean) as string[];
-
+        const result = await generateObject({
+          model: google('models/gemini-3-pro-preview'),
+          schema: z.object({
+            keywords: z.array(z.string()).describe('3-5 visual keywords or phrases to search for images'),
+          }),
+          prompt: `
+            Context: 
+            ${contextString.substring(0, 2000)} 
+            
+            Chat: 
+            ${sanitizedHistory.substring(0, 1000)}
+            
+            Generate 3 visual search keywords for a storyboard.
+          `,
+        });
+        searchQueries = result.object;
     } catch (e) {
-        console.error("Exa search failed", e);
+        console.warn("Keyword generation failed, skipping exa search", e);
+        searchQueries = { keywords: [] };
     }
 
-    // Collect available images
+    // 5. Search for assets (Exa)
+    let exaImages: string[] = [];
+    if (searchQueries.keywords && searchQueries.keywords.length > 0) {
+        try {
+            const searchResults = await Promise.all(
+                searchQueries.keywords.slice(0, 2).map(query => 
+                    exa.searchAndContents(query, {
+                        numResults: 1, // Minimal results
+                        type: 'neural',
+                        useAutoprompt: true,
+                    })
+                )
+            );
+            
+            // Placeholder for extraction - assuming we might get images in future
+            // For now, just ensuring this block doesn't crash or leak tokens
+            exaImages = []; 
+
+        } catch (e) {
+            console.warn("Exa search failed", e);
+        }
+    }
+
+    // 6. Collect & Filter Images
     const availableImages = new Set<string>();
-    if (selectedNode.imageUrl) availableImages.add(selectedNode.imageUrl);
-    if (selectedNode.assets && Array.isArray(selectedNode.assets)) {
-        selectedNode.assets.forEach((img: string) => availableImages.add(img));
-    }
-    // Add Exa images if we managed to get any (mocked for now as extraction is complex without scraping)
-    exaImages.forEach(img => availableImages.add(img));
+    
+    const addImageSafe = (img: string) => {
+        if (typeof img === 'string' && !img.startsWith('data:') && img.length < 2000) {
+            availableImages.add(img);
+        }
+    };
 
-    const imageList = Array.from(availableImages);
+    allContext.forEach(node => {
+        if (node.imageUrl) addImageSafe(node.imageUrl);
+        if (node.assets && Array.isArray(node.assets)) {
+            node.assets.forEach((img: string) => addImageSafe(img));
+        }
+    });
+    
+    exaImages.forEach(img => addImageSafe(img));
 
+    const imageList = Array.from(availableImages).slice(0, MAX_IMAGES);
+
+    // 7. Generate Scenes
     const isExpand = mode === 'expand';
-    const sceneCountPrompt = isExpand ? 'Generate 8-12 detailed scenes' : 'Generate 4-6 compelling scenes';
-    const detailPrompt = isExpand ? 'Provide more plot depth, character development, and descriptive notes.' : '';
+    const sceneCountPrompt = isExpand ? 'Generate 8-10 scenes' : 'Generate 4-6 scenes';
+    const detailPrompt = isExpand ? 'Provide plot depth.' : '';
 
     const { object } = await generateObject({
       model: google('models/gemini-3-pro-preview'),
       schema: z.object({
         scenes: z.array(z.object({
           id: z.string(),
-          text: z.string().describe('The script or narration for this scene'),
-          image: z.string().optional().describe('URL of an image from the research to use, if any. MUST be one of the provided available images.'),
-          notes: z.string().optional().describe('Director notes or visual description'),
+          text: z.string().describe('Script/Narration'),
+          image: z.string().optional().describe('Exact URL from Available Images if matching, else empty.'),
+          notes: z.string().optional().describe('Visual notes'),
         })),
       }),
       prompt: `
-        Create a visual storyboard based on the following research and conversation history.
+        Create a storyboard.
         
-        Research Context:
-        Title: ${selectedNode.title}
-        Content: ${selectedNode.content}
-        Available Images: ${JSON.stringify(imageList)}
+        Research:
+        ${contextString}
         
-        Conversation History:
-        ${messages.map((m: any) => `${m.role}: ${m.content}`).join('\n')}
+        Images: ${JSON.stringify(imageList)}
         
-        ${sceneCountPrompt} that tell a story.
-        ${detailPrompt}
-        Prioritize using the Available Images where they fit the narrative.
-        If no specific image matches a scene, leave the image field empty.
+        Chat:
+        ${sanitizedHistory}
+        
+        ${sceneCountPrompt}. ${detailPrompt}
+        Use provided images if relevant.
       `,
     });
 
     return new Response(JSON.stringify(object), {
       headers: { 'Content-Type': 'application/json' },
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Storyboard generation error:', error);
-    return new Response(JSON.stringify({ error: 'Failed to generate storyboard' }), { status: 500 });
+    return new Response(JSON.stringify({ error: error.message || 'Failed to generate storyboard' }), { status: 500 });
   }
 }

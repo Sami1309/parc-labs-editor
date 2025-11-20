@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Sparkles, RefreshCw, Play, Search, ThumbsUp, Loader2, Check, X, Image as ImageIcon, ArrowLeft, Plus, BarChart2, TrendingUp, Activity, Eye, Heart, Users, Calendar, Clock } from 'lucide-react';
+import { Sparkles, RefreshCw, Play, Search, ThumbsUp, Loader2, Check, X, Image as ImageIcon, ArrowLeft, Plus, BarChart2, TrendingUp, Activity, Eye, Heart, Users, Calendar, Clock, Settings2, ListPlus, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card } from '@/components/ui/card';
@@ -44,6 +44,14 @@ const RECENCY_OPTIONS = [
     { label: 'Last Week', value: '1w' },
 ];
 
+// Axis Options
+const AXIS_OPTIONS = [
+    { label: 'Outlier Score', value: 'outlierScore' },
+    { label: 'Views', value: 'viewCount' },
+    { label: 'Likes', value: 'likeCount' },
+    { label: 'Subscribers', value: 'subscriberCount' },
+];
+
 export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
   const [activeTab, setActiveTab] = useState<'trends' | 'outliers'>('trends');
   const [isLoading, setIsLoading] = useState(false);
@@ -54,7 +62,15 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
   const [generatedHooks, setGeneratedHooks] = useState<HookIdea[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [filter, setFilter] = useState<string>('');
-  const [recency, setRecency] = useState<string>(''); // '' | '6m' | '1m' | '1w'
+  const [recency, setRecency] = useState<string>('');
+  
+  // Outlier Graph Config
+  const [xAxis, setXAxis] = useState<string>('outlierScore');
+  const [yAxis, setYAxis] = useState<string>('viewCount');
+
+  // Select Mode
+  const [isSelectMode, setIsSelectMode] = useState(false);
+  const [selectedVideos, setSelectedVideos] = useState<TrendingVideo[]>([]);
 
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -96,18 +112,29 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
     }
   };
 
-  // Re-fetch when recency changes (and we are in a view that has data)
   useEffect(() => {
       if (videos.length > 0 || searchQuery) {
           fetchTrends(null, true);
       }
   }, [recency]);
 
-  const generateHooks = async (video: TrendingVideo, useLiked = false) => {
+  const generateHooks = async (video?: TrendingVideo, useLiked = false, batchVideos?: TrendingVideo[]) => {
     setIsLoading(true);
-    if (!useLiked) setSelectedVideo(video);
+    
+    // Batch Mode
+    if (batchVideos) {
+        if (batchVideos.length > 0) {
+             setSelectedVideo(batchVideos[0]); // Focus on first
+        }
+    } else if (video && !useLiked) {
+        setSelectedVideo(video);
+    }
+
     setPreviewVideo(null);
     
+    const targetVideo = video || (batchVideos ? batchVideos[0] : selectedVideo);
+    if (!targetVideo) { setIsLoading(false); return; }
+
     const likedHooks = useLiked ? generatedHooks.filter(h => h.liked) : [];
     
     try {
@@ -115,7 +142,7 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
         method: 'POST',
         body: JSON.stringify({ 
           action: 'generate_hooks', 
-          video,
+          video: targetVideo, 
           likedHooks 
         }),
         headers: { 'Content-Type': 'application/json' }
@@ -191,6 +218,14 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
       setGeneratedHooks([]);
   };
 
+  const toggleSelectVideo = (video: TrendingVideo) => {
+      if (selectedVideos.find(v => v.id === video.id)) {
+          setSelectedVideos(prev => prev.filter(v => v.id !== video.id));
+      } else {
+          setSelectedVideos(prev => [...prev, video]);
+      }
+  };
+
   const getViralityScore = (video: TrendingVideo) => {
       if (!video.viewCount || !video.subscriberCount) return null;
       const views = parseInt(video.viewCount);
@@ -200,10 +235,19 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
   };
 
   // --- Outlier Graph Logic ---
-  const maxViews = Math.max(...videos.map(v => parseInt(v.viewCount) || 0), 1);
-  const maxOutlier = Math.max(...videos.map(v => v.outlierScore || 0), 1);
-  const minViews = Math.min(...videos.map(v => parseInt(v.viewCount) || 0), maxViews);
-  const minOutlier = Math.min(...videos.map(v => v.outlierScore || 0), maxOutlier);
+  const getValue = (video: TrendingVideo, key: string) => {
+      if (key === 'outlierScore') return video.outlierScore || 0;
+      // @ts-ignore
+      return parseInt(video[key] || video.statistics?.[key] || '0');
+  };
+
+  const xValues = videos.map(v => getValue(v, xAxis));
+  const yValues = videos.map(v => getValue(v, yAxis));
+  
+  const minX = Math.min(...xValues.filter(v => v > 0));
+  const maxX = Math.max(...xValues);
+  const minY = Math.min(...yValues.filter(v => v > 0));
+  const maxY = Math.max(...yValues);
 
   const getLogPos = (value: number, min: number, max: number) => {
       if (value <= 0) return 0;
@@ -215,35 +259,48 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
       return ((logVal - logMin) / range) * 100;
   };
 
+  // Derived maxViews for bubble sizing specifically (using viewCount regardless of axis)
+  const maxViews = Math.max(...videos.map(v => parseInt(v.viewCount) || 0), 1);
+
   return (
     <div className="h-full flex flex-col bg-stone-50 overflow-hidden">
       {/* Header */}
       <div className="p-6 border-b border-stone-200 bg-white space-y-4 z-20 relative shadow-sm">
+        {/* ... header code ... */}
         <div className="flex items-center justify-between">
             <div>
                 <h1 className="text-2xl font-bold text-stone-900 mb-1">Hook & Trend Generator</h1>
                 <p className="text-stone-600">Discover trending formats and generate viral hooks using AI.</p>
             </div>
             {!selectedVideo && (
-                <div className="flex bg-stone-100 p-1 rounded-lg">
+                <div className="flex items-center gap-2">
                     <button 
-                        onClick={() => { setActiveTab('trends'); setVideos([]); fetchTrends(null, true); }}
-                        className={cn("px-4 py-2 rounded-md text-sm font-medium transition-all", activeTab === 'trends' ? "bg-white shadow text-stone-900" : "text-stone-500 hover:text-stone-900")}
+                        onClick={() => setIsSelectMode(!isSelectMode)}
+                        className={cn("px-4 py-2 rounded-md text-sm font-medium transition-all border", isSelectMode ? "bg-stone-900 text-white border-stone-900" : "bg-white text-stone-700 border-stone-200 hover:bg-stone-50")}
                     >
-                        <TrendingUp className="inline-block mr-2 w-4 h-4" /> Feed
+                        <ListPlus className="inline-block mr-2 w-4 h-4" /> Select Mode
                     </button>
-                    <button 
-                         onClick={() => { setActiveTab('outliers'); setVideos([]); fetchTrends(null, true); }}
-                        className={cn("px-4 py-2 rounded-md text-sm font-medium transition-all", activeTab === 'outliers' ? "bg-white shadow text-stone-900" : "text-stone-500 hover:text-stone-900")}
-                    >
-                        <Activity className="inline-block mr-2 w-4 h-4" /> Outlier Analysis
-                    </button>
+                    <div className="flex bg-stone-100 p-1 rounded-lg">
+                        <button 
+                            onClick={() => { setActiveTab('trends'); setVideos([]); fetchTrends(null, true); }}
+                            className={cn("px-4 py-2 rounded-md text-sm font-medium transition-all", activeTab === 'trends' ? "bg-white shadow text-stone-900" : "text-stone-500 hover:text-stone-900")}
+                        >
+                            <TrendingUp className="inline-block mr-2 w-4 h-4" /> Feed
+                        </button>
+                        <button 
+                            onClick={() => { setActiveTab('outliers'); setVideos([]); fetchTrends(null, true); }}
+                            className={cn("px-4 py-2 rounded-md text-sm font-medium transition-all", activeTab === 'outliers' ? "bg-white shadow text-stone-900" : "text-stone-500 hover:text-stone-900")}
+                        >
+                            <Activity className="inline-block mr-2 w-4 h-4" /> Outlier Analysis
+                        </button>
+                    </div>
                 </div>
             )}
         </div>
         
         {!selectedVideo && (
             <div className="space-y-3">
+                {/* Search & Filters */}
                 <div className="flex gap-2 max-w-xl">
                     <Input 
                         placeholder={activeTab === 'outliers' ? "Enter niche to analyze outliers..." : "Search topic (optional)..."}
@@ -257,6 +314,35 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
                         {activeTab === 'outliers' ? 'Analyze' : 'Find Trends'}
                     </Button>
                 </div>
+                
+                {/* Axis Config (Outliers Only) */}
+                {activeTab === 'outliers' && (
+                    <div className="flex items-center gap-4 p-3 bg-stone-50 rounded-lg border border-stone-200">
+                        <div className="flex items-center gap-2">
+                            <Settings2 size={14} className="text-stone-400" />
+                            <span className="text-xs font-bold text-stone-500 uppercase">X-Axis:</span>
+                            <select 
+                                value={xAxis}
+                                onChange={(e) => setXAxis(e.target.value)}
+                                className="bg-white border border-stone-200 text-xs rounded px-2 py-1 text-stone-700 focus:outline-none"
+                            >
+                                {AXIS_OPTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+                            </select>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <span className="text-xs font-bold text-stone-500 uppercase">Y-Axis:</span>
+                            <select 
+                                value={yAxis}
+                                onChange={(e) => setYAxis(e.target.value)}
+                                className="bg-white border border-stone-200 text-xs rounded px-2 py-1 text-stone-700 focus:outline-none"
+                            >
+                                {AXIS_OPTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+                            </select>
+                        </div>
+                    </div>
+                )}
+
+                {/* Other Filters */}
                 <div className="flex flex-wrap items-center gap-4">
                      <div className="flex gap-2">
                          <Button 
@@ -281,9 +367,7 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
                             Data / Infographic
                          </Button>
                      </div>
-                     
                      <div className="h-6 w-px bg-stone-200 mx-2" />
-                     
                      <div className="flex gap-2">
                          {RECENCY_OPTIONS.map((opt) => (
                              <Button
@@ -308,6 +392,29 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
         )}
       </div>
 
+      {/* Selected Videos Tray */}
+      {isSelectMode && selectedVideos.length > 0 && !selectedVideo && (
+          <div className="bg-stone-900 text-white p-4 z-30 shadow-lg border-b border-stone-800 flex items-center justify-between">
+              <div className="flex items-center gap-4 overflow-x-auto max-w-3xl pb-1 scrollbar-hide">
+                  <span className="text-sm font-bold whitespace-nowrap">{selectedVideos.length} Selected:</span>
+                  {selectedVideos.map(v => (
+                      <div key={v.id} className="relative group flex-shrink-0 w-12 h-12 rounded overflow-hidden border border-stone-700">
+                          <img src={v.thumbnail} className="w-full h-full object-cover" />
+                          <button 
+                            onClick={() => toggleSelectVideo(v)}
+                            className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity"
+                          >
+                              <X size={14} />
+                          </button>
+                      </div>
+                  ))}
+              </div>
+              <Button size="sm" variant="secondary" onClick={() => generateHooks(undefined, false, selectedVideos)}>
+                  <Sparkles size={14} className="mr-2" /> Generate Batch Hooks
+              </Button>
+          </div>
+      )}
+
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-6 relative" ref={containerRef}>
         {!selectedVideo ? (
@@ -317,15 +424,30 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                         {videos.map((video) => {
                             const virality = getViralityScore(video);
+                            const isSelected = selectedVideos.some(v => v.id === video.id);
                             return (
-                            <Card key={video.id} className="overflow-hidden hover:shadow-lg transition-shadow cursor-pointer group flex flex-col" onClick={() => setPreviewVideo(video)}>
+                            <Card 
+                                key={video.id} 
+                                className={cn(
+                                    "overflow-hidden hover:shadow-lg transition-all cursor-pointer group flex flex-col border-2",
+                                    isSelected ? "border-stone-900 ring-2 ring-stone-900 ring-offset-2" : "border-transparent"
+                                )}
+                                onClick={() => isSelectMode ? toggleSelectVideo(video) : setPreviewVideo(video)}
+                            >
                                 <div className="relative aspect-video bg-stone-200">
                                 <img src={video.thumbnail} alt={video.title} className="w-full h-full object-cover" />
-                                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
-                                    <Button variant="secondary" className="opacity-0 group-hover:opacity-100 transition-opacity">
-                                    <Eye className="mr-2" size={16} /> Preview
-                                    </Button>
-                                </div>
+                                
+                                {isSelectMode ? (
+                                     <div className={cn("absolute top-2 right-2 w-6 h-6 rounded-full border-2 flex items-center justify-center transition-colors", isSelected ? "bg-stone-900 border-stone-900 text-white" : "bg-black/50 border-white text-transparent")}>
+                                         <Check size={14} />
+                                     </div>
+                                ) : (
+                                    <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
+                                        <Button variant="secondary" className="opacity-0 group-hover:opacity-100 transition-opacity">
+                                        <Eye className="mr-2" size={16} /> Preview
+                                        </Button>
+                                    </div>
+                                )}
                                 {virality && (
                                     <div className="absolute bottom-2 right-2 bg-green-500 text-white text-xs font-bold px-2 py-1 rounded-md shadow-sm flex items-center">
                                         <BarChart2 size={12} className="mr-1" /> {virality} Viral
@@ -369,11 +491,11 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
                             <div className="absolute left-12 bottom-12 right-8 top-8 border-l border-b border-stone-300">
                                 {/* Y Label */}
                                 <div className="absolute -left-10 top-1/2 -translate-y-1/2 -rotate-90 text-xs font-bold text-stone-500 tracking-wider">
-                                    POPULARITY (Log Scale)
+                                    {AXIS_OPTIONS.find(o => o.value === yAxis)?.label || yAxis} (Log)
                                 </div>
                                 {/* X Label */}
                                 <div className="absolute bottom-[-30px] left-1/2 -translate-x-1/2 text-xs font-bold text-stone-500 tracking-wider">
-                                    OUTLIER SCORE (Log Scale)
+                                    {AXIS_OPTIONS.find(o => o.value === xAxis)?.label || xAxis} (Log)
                                 </div>
 
                                 {/* Grid Lines */}
@@ -384,11 +506,15 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
                                 {/* Bubbles */}
                                 <AnimatePresence>
                                     {videos.map((video) => {
-                                        // Use Logarithmic scale
-                                        const xRaw = getLogPos(video.outlierScore || 1, minOutlier, maxOutlier);
-                                        const yRaw = getLogPos(parseInt(video.viewCount), minViews, maxViews);
+                                        const isSelected = selectedVideos.some(v => v.id === video.id);
+                                        const rawXVal = getValue(video, xAxis);
+                                        const rawYVal = getValue(video, yAxis);
+
+                                        // Log Scale
+                                        const xRaw = getLogPos(rawXVal, minX, maxX);
+                                        const yRaw = getLogPos(rawYVal, minY, maxY);
                                         
-                                        // Inset clamping to ensure tooltips and bubbles stay visible (5% to 95% instead of 2-98)
+                                        // Clamp strictly within visible area (5% - 95%)
                                         const x = Math.min(Math.max(xRaw, 5), 95);
                                         const y = Math.min(Math.max(yRaw, 5), 95);
                                         
@@ -398,27 +524,42 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
                                             <motion.div
                                                 key={video.id}
                                                 initial={{ opacity: 0, scale: 0 }}
-                                                animate={{ opacity: 1, scale: 1, x: `${x}%`, y: `${100 - y}%` }}
-                                                className="absolute transform -translate-x-1/2 -translate-y-1/2 cursor-pointer group z-10 hover:z-50"
+                                                animate={{ 
+                                                    opacity: 1, 
+                                                    scale: 1, 
+                                                    x: `${x}%`, 
+                                                    y: `${100 - y}%`,
+                                                    borderWidth: isSelected ? 4 : 0,
+                                                    borderColor: isSelected ? '#1c1917' : 'transparent'
+                                                }}
+                                                className={cn(
+                                                    "absolute transform -translate-x-1/2 -translate-y-1/2 cursor-pointer group z-10 hover:z-50 rounded-full transition-colors",
+                                                    isSelected && "z-40"
+                                                )}
                                                 style={{ 
                                                     left: `${x}%`, 
                                                     top: `${100 - y}%`,
                                                     width: size,
                                                     height: size
                                                 }}
-                                                onClick={() => setPreviewVideo(video)}
+                                                onClick={() => isSelectMode ? toggleSelectVideo(video) : setPreviewVideo(video)}
                                                 whileHover={{ scale: 1.2, zIndex: 100 }}
                                             >
                                                 <div className="w-full h-full rounded-full overflow-hidden border-2 border-white shadow-lg relative bg-stone-200">
                                                     <img src={video.thumbnail} className="w-full h-full object-cover" alt={video.title} />
+                                                    {isSelectMode && isSelected && (
+                                                        <div className="absolute inset-0 bg-stone-900/50 flex items-center justify-center">
+                                                            <Check className="text-white" size={20} />
+                                                        </div>
+                                                    )}
                                                 </div>
                                                 
-                                                {/* Tooltip - Responsive Positioning */}
+                                                {/* Tooltip - Reversed Vertical Logic & Clamped Horizontal */}
                                                 <div className={cn(
                                                     "absolute left-1/2 -translate-x-1/2 w-64 bg-stone-900/95 backdrop-blur-sm text-white text-xs p-3 rounded-lg shadow-xl pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity z-50 flex flex-col gap-1",
-                                                    y > 60 ? "bottom-full mb-3" : "top-full mt-3",
-                                                    x < 20 ? "left-0 translate-x-0" : "", // Adjust if too far left
-                                                    x > 80 ? "right-0 left-auto translate-x-0" : "" // Adjust if too far right
+                                                    y < 40 ? "bottom-full mb-3" : "top-full mt-3", // Reversed: if Y is small (bottom), show tooltip ABOVE. If Y is large (top), show BELOW.
+                                                    x < 20 ? "left-0 translate-x-0" : "", 
+                                                    x > 80 ? "right-0 left-auto translate-x-0" : ""
                                                 )}>
                                                     <p className="font-bold line-clamp-2 text-sm">{video.title}</p>
                                                     <div className="flex justify-between text-stone-300 mt-1 border-t border-white/10 pt-2">
@@ -437,6 +578,7 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
             )}
           </>
         ) : (
+          // ... rest of component ...
           <div className="max-w-6xl mx-auto space-y-8">
             {/* Selected Video Info */}
             <div className="flex flex-col md:flex-row gap-6 items-start p-6 bg-white rounded-xl border border-stone-200 shadow-sm">

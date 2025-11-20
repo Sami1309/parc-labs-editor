@@ -1,19 +1,24 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Sparkles, RefreshCw, Play, Search, ThumbsUp, Loader2, Check, X, Image as ImageIcon, ArrowLeft } from 'lucide-react';
+import { Sparkles, RefreshCw, Play, Search, ThumbsUp, Loader2, Check, X, Image as ImageIcon, ArrowLeft, Plus, BarChart2, TrendingUp, Activity } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
+import { motion, AnimatePresence } from 'framer-motion';
 
 interface TrendingVideo {
   id: string;
   title: string;
   thumbnail: string;
   viewCount: string;
+  likeCount?: string;
+  subscriberCount?: string;
   channelTitle: string;
   publishedAt: string;
+  description?: string;
+  outlierScore?: number;
 }
 
 interface HookIdea {
@@ -22,28 +27,43 @@ interface HookIdea {
   thumbnailConcept: string;
   hook: string;
   liked?: boolean;
-  generatedImage?: string;
+  generatedImages?: string[];
+  selectedImageIndex?: number;
   isGeneratingImage?: boolean;
 }
 
-export function HookGenerator() {
+interface HookGeneratorProps {
+  onStartResearch?: (data: { title: string, hook: string, image?: string }) => void;
+}
+
+export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
+  const [activeTab, setActiveTab] = useState<'trends' | 'outliers'>('trends');
   const [isLoading, setIsLoading] = useState(false);
   const [videos, setVideos] = useState<TrendingVideo[]>([]);
+  const [nextPageToken, setNextPageToken] = useState<string | null>(null);
   const [selectedVideo, setSelectedVideo] = useState<TrendingVideo | null>(null);
   const [generatedHooks, setGeneratedHooks] = useState<HookIdea[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
+  const [filter, setFilter] = useState<string>('');
 
-  const fetchTrends = async () => {
+  const fetchTrends = async (token?: string | null, reset = false) => {
     setIsLoading(true);
     try {
       const res = await fetch('/api/hooks', {
         method: 'POST',
-        body: JSON.stringify({ action: 'fetch_trends', query: searchQuery }),
+        body: JSON.stringify({ 
+            action: 'fetch_trends', 
+            query: searchQuery, 
+            pageToken: token,
+            semanticFilter: filter,
+            isOutlierMode: activeTab === 'outliers'
+        }),
         headers: { 'Content-Type': 'application/json' }
       });
       const data = await res.json();
       if (data.videos) {
-        setVideos(data.videos);
+        setVideos(prev => reset ? data.videos : [...prev, ...data.videos]);
+        setNextPageToken(data.nextPageToken);
       }
     } catch (error) {
       console.error('Failed to fetch trends:', error);
@@ -71,7 +91,6 @@ export function HookGenerator() {
       const data = await res.json();
       if (data.hooks) {
         if (useLiked) {
-            // Keep liked ones, replace unliked ones with new suggestions
             setGeneratedHooks(prev => [...prev.filter(h => h.liked), ...data.hooks]);
         } else {
             setGeneratedHooks(data.hooks);
@@ -86,7 +105,7 @@ export function HookGenerator() {
 
   const handleLike = (id: string) => {
       setGeneratedHooks(prev => prev.map(h => 
-          h.id === id ? { ...h, liked: true } : h
+          h.id === id ? { ...h, liked: !h.liked } : h
       ));
   };
 
@@ -106,9 +125,9 @@ export function HookGenerator() {
             headers: { 'Content-Type': 'application/json' }
           });
           const data = await res.json();
-          if (data.imageUrl) {
+          if (data.images) {
             setGeneratedHooks(prev => prev.map(h => 
-                h.id === id ? { ...h, generatedImage: data.imageUrl, isGeneratingImage: false } : h
+                h.id === id ? { ...h, generatedImages: data.images, selectedImageIndex: 0, isGeneratingImage: false } : h
             ));
           }
       } catch (e) {
@@ -119,67 +138,252 @@ export function HookGenerator() {
       }
   };
 
+  const selectImage = (hookId: string, index: number) => {
+      setGeneratedHooks(prev => prev.map(h => 
+        h.id === hookId ? { ...h, selectedImageIndex: index } : h
+    ));
+  };
+
+  const handleStartResearchClick = (hook: HookIdea) => {
+      if (onStartResearch) {
+          onStartResearch({
+              title: hook.title,
+              hook: hook.hook,
+              image: hook.generatedImages?.[hook.selectedImageIndex || 0]
+          });
+      }
+  };
+
   const clearSelection = () => {
       setSelectedVideo(null);
       setGeneratedHooks([]);
   };
 
+  const getViralityScore = (video: TrendingVideo) => {
+      if (!video.viewCount || !video.subscriberCount) return null;
+      const views = parseInt(video.viewCount);
+      const subs = parseInt(video.subscriberCount);
+      if (subs === 0) return null;
+      return (views / subs).toFixed(1) + 'x';
+  };
+
+  // --- Outlier Graph Logic ---
+  const maxViews = Math.max(...videos.map(v => parseInt(v.viewCount) || 0), 1);
+  const maxOutlier = Math.max(...videos.map(v => v.outlierScore || 0), 1);
+
   return (
     <div className="h-full flex flex-col bg-stone-50 overflow-hidden">
-      <div className="p-6 border-b border-stone-200 bg-white">
-        <h1 className="text-2xl font-bold text-stone-900 mb-2">Hook & Trend Generator</h1>
-        <p className="text-stone-600 mb-4">Discover trending formats and generate viral hooks using AI.</p>
-        
-        {!selectedVideo ? (
-            <div className="flex gap-2 max-w-xl">
-            <Input 
-                placeholder="Search topic (optional)..." 
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && fetchTrends()}
-            />
-            <Button onClick={fetchTrends} disabled={isLoading}>
-                {isLoading ? <Loader2 className="animate-spin mr-2" /> : <Search className="mr-2" size={18} />}
-                Find Trends
-            </Button>
+      {/* Header */}
+      <div className="p-6 border-b border-stone-200 bg-white space-y-4">
+        <div className="flex items-center justify-between">
+            <div>
+                <h1 className="text-2xl font-bold text-stone-900 mb-1">Hook & Trend Generator</h1>
+                <p className="text-stone-600">Discover trending formats and generate viral hooks using AI.</p>
             </div>
-        ) : (
+            {!selectedVideo && (
+                <div className="flex bg-stone-100 p-1 rounded-lg">
+                    <button 
+                        onClick={() => { setActiveTab('trends'); setVideos([]); fetchTrends(null, true); }}
+                        className={cn("px-4 py-2 rounded-md text-sm font-medium transition-all", activeTab === 'trends' ? "bg-white shadow text-stone-900" : "text-stone-500 hover:text-stone-900")}
+                    >
+                        <TrendingUp className="inline-block mr-2 w-4 h-4" /> Feed
+                    </button>
+                    <button 
+                         onClick={() => { setActiveTab('outliers'); setVideos([]); fetchTrends(null, true); }}
+                        className={cn("px-4 py-2 rounded-md text-sm font-medium transition-all", activeTab === 'outliers' ? "bg-white shadow text-stone-900" : "text-stone-500 hover:text-stone-900")}
+                    >
+                        <Activity className="inline-block mr-2 w-4 h-4" /> Outlier Analysis
+                    </button>
+                </div>
+            )}
+        </div>
+        
+        {!selectedVideo && (
+            <div className="space-y-3">
+                <div className="flex gap-2 max-w-xl">
+                    <Input 
+                        placeholder={activeTab === 'outliers' ? "Enter niche to analyze outliers..." : "Search topic (optional)..."}
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && fetchTrends(null, true)}
+                    />
+                    <Button onClick={() => fetchTrends(null, true)} disabled={isLoading}>
+                        {isLoading ? <Loader2 className="animate-spin mr-2" /> : <Search className="mr-2" size={18} />}
+                        {activeTab === 'outliers' ? 'Analyze' : 'Find Trends'}
+                    </Button>
+                </div>
+                <div className="flex gap-2">
+                     <Button 
+                        variant={filter === '' ? 'secondary' : 'ghost'} 
+                        size="sm" 
+                        onClick={() => { setFilter(''); fetchTrends(null, true); }}
+                    >
+                        All
+                     </Button>
+                     <Button 
+                        variant={filter === 'no face' ? 'secondary' : 'ghost'} 
+                        size="sm" 
+                        onClick={() => { setFilter('no face'); fetchTrends(null, true); }}
+                    >
+                        No Face / Faceless
+                     </Button>
+                     <Button 
+                        variant={filter === 'infographic' ? 'secondary' : 'ghost'} 
+                        size="sm" 
+                        onClick={() => { setFilter('infographic'); fetchTrends(null, true); }}
+                    >
+                        Data / Infographic
+                     </Button>
+                </div>
+            </div>
+        )}
+         {selectedVideo && (
             <Button variant="outline" onClick={clearSelection}>
-                <ArrowLeft className="mr-2" size={16} /> Back to Trends
+                <ArrowLeft className="mr-2" size={16} /> Back to {activeTab === 'outliers' ? 'Analysis' : 'Trends'}
             </Button>
         )}
       </div>
 
-      <div className="flex-1 overflow-y-auto p-6">
+      {/* Content */}
+      <div className="flex-1 overflow-y-auto p-6 relative">
         {!selectedVideo ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {videos.map((video) => (
-              <Card key={video.id} className="overflow-hidden hover:shadow-lg transition-shadow cursor-pointer group" onClick={() => generateHooks(video)}>
-                <div className="relative aspect-video bg-stone-200">
-                  <img src={video.thumbnail} alt={video.title} className="w-full h-full object-cover" />
-                  <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
-                    <Button variant="secondary" className="opacity-0 group-hover:opacity-100 transition-opacity">
-                      <Sparkles className="mr-2" size={16} /> Generate Hooks
-                    </Button>
-                  </div>
+          <>
+            {activeTab === 'trends' && (
+                <div className="space-y-6">
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                        {videos.map((video) => {
+                            const virality = getViralityScore(video);
+                            return (
+                            <Card key={video.id} className="overflow-hidden hover:shadow-lg transition-shadow cursor-pointer group flex flex-col" onClick={() => generateHooks(video)}>
+                                <div className="relative aspect-video bg-stone-200">
+                                <img src={video.thumbnail} alt={video.title} className="w-full h-full object-cover" />
+                                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
+                                    <Button variant="secondary" className="opacity-0 group-hover:opacity-100 transition-opacity">
+                                    <Sparkles className="mr-2" size={16} /> Generate Hooks
+                                    </Button>
+                                </div>
+                                {virality && (
+                                    <div className="absolute bottom-2 right-2 bg-green-500 text-white text-xs font-bold px-2 py-1 rounded-md shadow-sm flex items-center">
+                                        <BarChart2 size={12} className="mr-1" /> {virality} Viral
+                                    </div>
+                                )}
+                                </div>
+                                <div className="p-4 flex-1 flex flex-col">
+                                <h3 className="font-semibold line-clamp-2 mb-1">{video.title}</h3>
+                                <div className="flex items-center justify-between text-sm text-stone-500 mt-auto">
+                                    <span className="truncate pr-2">{video.channelTitle}</span>
+                                    <span className="whitespace-nowrap">{parseInt(video.viewCount).toLocaleString()} views</span>
+                                </div>
+                                </div>
+                            </Card>
+                            );
+                        })}
+                    </div>
+                    
+                    {videos.length > 0 && nextPageToken && (
+                        <div className="flex justify-center pt-4">
+                            <Button variant="outline" onClick={() => fetchTrends(nextPageToken)} disabled={isLoading}>
+                                {isLoading && <Loader2 className="animate-spin mr-2" size={16} />}
+                                Load More Videos
+                            </Button>
+                        </div>
+                    )}
                 </div>
-                <div className="p-4">
-                  <h3 className="font-semibold line-clamp-2 mb-1">{video.title}</h3>
-                  <div className="flex items-center justify-between text-sm text-stone-500">
-                    <span>{video.channelTitle}</span>
-                    <span>{parseInt(video.viewCount).toLocaleString()} views</span>
-                  </div>
+            )}
+
+            {activeTab === 'outliers' && (
+                <div className="h-full w-full bg-stone-50 rounded-xl border border-stone-200 relative overflow-hidden p-8">
+                    {videos.length === 0 && !isLoading && (
+                        <div className="absolute inset-0 flex items-center justify-center text-stone-400">
+                            <p>Enter a niche to analyze outliers</p>
+                        </div>
+                    )}
+                    
+                    {videos.length > 0 && (
+                        <>
+                            {/* Graph Axes */}
+                            <div className="absolute left-12 bottom-12 right-8 top-8 border-l border-b border-stone-300">
+                                {/* Y Label */}
+                                <div className="absolute -left-10 top-1/2 -translate-y-1/2 -rotate-90 text-xs font-bold text-stone-500 tracking-wider">
+                                    POPULARITY (VIEWS)
+                                </div>
+                                {/* X Label */}
+                                <div className="absolute bottom-[-30px] left-1/2 -translate-x-1/2 text-xs font-bold text-stone-500 tracking-wider">
+                                    OUTLIER SCORE (Performance vs Channel Avg)
+                                </div>
+
+                                {/* Grid Lines (Optional) */}
+                                <div className="absolute left-0 top-1/4 w-full h-px bg-stone-100" />
+                                <div className="absolute left-0 top-2/4 w-full h-px bg-stone-100" />
+                                <div className="absolute left-0 top-3/4 w-full h-px bg-stone-100" />
+                                
+                                {/* Bubbles */}
+                                <AnimatePresence>
+                                    {videos.map((video) => {
+                                        const x = Math.min(Math.max(((video.outlierScore || 0) / maxOutlier) * 100, 2), 98);
+                                        const y = Math.min(Math.max((parseInt(video.viewCount) / maxViews) * 100, 2), 98);
+                                        const size = 40 + Math.min((parseInt(video.viewCount) / maxViews) * 40, 40); // Size between 40px and 80px
+
+                                        return (
+                                            <motion.div
+                                                key={video.id}
+                                                initial={{ opacity: 0, scale: 0 }}
+                                                animate={{ opacity: 1, scale: 1, x: `${x}%`, y: `${100 - y}%` }}
+                                                className="absolute transform -translate-x-1/2 -translate-y-1/2 cursor-pointer group z-10 hover:z-50"
+                                                style={{ 
+                                                    left: `${x}%`, 
+                                                    top: `${100 - y}%`,
+                                                    width: size,
+                                                    height: size
+                                                }}
+                                                onClick={() => generateHooks(video)}
+                                                whileHover={{ scale: 1.5 }}
+                                            >
+                                                <div className="w-full h-full rounded-full overflow-hidden border-2 border-white shadow-lg relative">
+                                                    <img src={video.thumbnail} className="w-full h-full object-cover" />
+                                                </div>
+                                                
+                                                {/* Tooltip */}
+                                                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-48 bg-stone-900 text-white text-xs p-2 rounded pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity z-50">
+                                                    <p className="font-bold line-clamp-2">{video.title}</p>
+                                                    <p className="text-stone-300 mt-1">{parseInt(video.viewCount).toLocaleString()} views</p>
+                                                    <p className="text-green-400">{video.outlierScore?.toFixed(1)}x Outlier Score</p>
+                                                </div>
+                                            </motion.div>
+                                        );
+                                    })}
+                                </AnimatePresence>
+                            </div>
+                        </>
+                    )}
                 </div>
-              </Card>
-            ))}
-          </div>
+            )}
+          </>
         ) : (
           <div className="max-w-6xl mx-auto space-y-8">
-            <div className="flex gap-6 items-start p-6 bg-white rounded-xl border border-stone-200">
-              <img src={selectedVideo.thumbnail} alt={selectedVideo.title} className="w-48 rounded-lg" />
-              <div>
-                <h2 className="text-xl font-bold mb-2">{selectedVideo.title}</h2>
-                <p className="text-stone-600 mb-4">{selectedVideo.channelTitle} • {parseInt(selectedVideo.viewCount).toLocaleString()} views</p>
+            {/* Selected Video Info */}
+            <div className="flex flex-col md:flex-row gap-6 items-start p-6 bg-white rounded-xl border border-stone-200 shadow-sm">
+              <img src={selectedVideo.thumbnail} alt={selectedVideo.title} className="w-full md:w-64 rounded-lg shadow-md" />
+              <div className="flex-1">
+                <h2 className="text-2xl font-bold mb-2">{selectedVideo.title}</h2>
+                <p className="text-stone-600 mb-4 flex items-center gap-2">
+                    {selectedVideo.channelTitle} 
+                    <span className="text-stone-300">•</span> 
+                    {parseInt(selectedVideo.viewCount).toLocaleString()} views
+                    {selectedVideo.likeCount && (
+                        <>
+                            <span className="text-stone-300">•</span>
+                            {parseInt(selectedVideo.likeCount).toLocaleString()} likes
+                        </>
+                    )}
+                    {selectedVideo.outlierScore && (
+                        <span className="ml-2 bg-green-100 text-green-800 px-2 py-0.5 rounded text-sm font-bold">
+                            {selectedVideo.outlierScore}x Outlier
+                        </span>
+                    )}
+                </p>
+                <p className="text-sm text-stone-500 mb-6 line-clamp-3 max-w-2xl">{selectedVideo.description}</p>
+                
                 <Button onClick={() => generateHooks(selectedVideo, true)} disabled={isLoading}>
                   <RefreshCw className={`mr-2 ${isLoading ? 'animate-spin' : ''}`} size={16} />
                   Regenerate from Checked
@@ -187,45 +391,82 @@ export function HookGenerator() {
               </div>
             </div>
 
+            {/* Hooks Grid */}
             <div className="space-y-4">
-              <h3 className="text-lg font-semibold">Concepts</h3>
+              <div className="flex items-center justify-between">
+                  <h3 className="text-lg font-semibold">Generated Concepts</h3>
+                  <span className="text-sm text-stone-500">{generatedHooks.length} ideas found</span>
+              </div>
+              
               <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
                 {generatedHooks.map((hook) => (
                   <Card key={hook.id} className={cn(
-                      "p-6 relative transition-all border-2",
-                      hook.liked ? "border-green-500 bg-green-50/50" : "border-stone-200"
+                      "p-6 relative transition-all border-2 flex flex-col",
+                      hook.liked ? "border-green-500 bg-green-50/30" : "border-stone-200"
                   )}>
-                    <div className="absolute top-2 right-2 flex gap-1">
+                    <div className="absolute top-2 right-2 flex gap-1 z-10">
                         <button 
                             onClick={() => handleLike(hook.id)}
-                            className={cn("p-1.5 rounded-full hover:bg-green-100 transition-colors", hook.liked ? "text-green-600" : "text-stone-400")}
+                            className={cn(
+                                "p-1.5 rounded-full transition-colors border", 
+                                hook.liked ? "bg-green-100 text-green-600 border-green-200" : "bg-white text-stone-400 border-stone-200 hover:border-stone-300"
+                            )}
+                            title="Like this idea"
                         >
-                            <Check size={18} />
+                            <Check size={16} />
                         </button>
                         <button 
                             onClick={() => handleDiscard(hook.id)}
-                            className="p-1.5 rounded-full hover:bg-red-100 text-stone-400 hover:text-red-600 transition-colors"
+                            className="p-1.5 rounded-full bg-white text-stone-400 border border-stone-200 hover:border-red-200 hover:text-red-600 hover:bg-red-50 transition-colors"
+                            title="Discard"
                         >
-                            <X size={18} />
+                            <X size={16} />
                         </button>
                     </div>
 
-                    <div className="space-y-4 mt-2">
+                    <div className="space-y-4 mt-2 flex-1">
                       <div>
                         <span className="text-xs font-semibold uppercase tracking-wider text-stone-500">Title</span>
-                        <p className="text-lg font-medium leading-tight">{hook.title}</p>
+                        <p className="text-lg font-medium leading-tight mt-1">{hook.title}</p>
                       </div>
                       <div>
                         <span className="text-xs font-semibold uppercase tracking-wider text-stone-500">Hook</span>
-                        <p className="text-stone-700">{hook.hook}</p>
+                        <p className="text-stone-700 mt-1 text-sm">{hook.hook}</p>
                       </div>
                       <div>
-                        <span className="text-xs font-semibold uppercase tracking-wider text-stone-500">Thumbnail Concept</span>
-                        <p className="text-sm text-stone-600 italic mb-2">{hook.thumbnailConcept}</p>
+                        <span className="text-xs font-semibold uppercase tracking-wider text-stone-500 block mb-2">Thumbnail Concept</span>
+                        <p className="text-xs text-stone-500 italic mb-3">{hook.thumbnailConcept}</p>
                         
-                        {hook.generatedImage ? (
-                             <div className="aspect-video w-full rounded-lg overflow-hidden bg-stone-100 border border-stone-200">
-                                <img src={hook.generatedImage} alt="Generated thumbnail" className="w-full h-full object-cover" />
+                        {hook.generatedImages && hook.generatedImages.length > 0 ? (
+                             <div className="space-y-2">
+                                 <div className="aspect-video w-full rounded-lg overflow-hidden bg-stone-100 border border-stone-200 relative group">
+                                    <img 
+                                        src={hook.generatedImages[hook.selectedImageIndex || 0]} 
+                                        alt="Generated thumbnail" 
+                                        className="w-full h-full object-cover" 
+                                    />
+                                    {/* Overlay for Research Action */}
+                                    <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100">
+                                        <Button size="sm" onClick={() => handleStartResearchClick(hook)}>
+                                            <Plus className="mr-2" size={16} /> Start Research
+                                        </Button>
+                                    </div>
+                                 </div>
+                                 {/* Thumbnail Selector */}
+                                 <div className="flex gap-2 overflow-x-auto pb-2">
+                                     {hook.generatedImages.map((img, idx) => (
+                                         <button 
+                                            key={idx}
+                                            onClick={() => selectImage(hook.id, idx)}
+                                            className={cn(
+                                                "w-16 h-9 rounded overflow-hidden flex-shrink-0 border-2 transition-all",
+                                                (hook.selectedImageIndex || 0) === idx ? "border-purple-500 ring-1 ring-purple-500" : "border-transparent opacity-70 hover:opacity-100"
+                                            )}
+                                         >
+                                             <img src={img} className="w-full h-full object-cover" />
+                                         </button>
+                                     ))}
+                                 </div>
                              </div>
                         ) : (
                             <Button 
@@ -236,11 +477,23 @@ export function HookGenerator() {
                                 disabled={hook.isGeneratingImage}
                             >
                                 {hook.isGeneratingImage ? <Loader2 className="animate-spin mr-2" size={14} /> : <ImageIcon className="mr-2" size={14} />}
-                                Generate Visual
+                                Generate 4 Visuals
                             </Button>
                         )}
                       </div>
                     </div>
+                    
+                    {hook.generatedImages && (
+                        <div className="pt-4 mt-4 border-t border-stone-100">
+                            <Button 
+                                className="w-full" 
+                                variant={hook.liked ? "default" : "outline"}
+                                onClick={() => handleStartResearchClick(hook)}
+                            >
+                                Start Research with this Concept
+                            </Button>
+                        </div>
+                    )}
                   </Card>
                 ))}
               </div>
@@ -248,7 +501,7 @@ export function HookGenerator() {
           </div>
         )}
         
-        {!isLoading && videos.length === 0 && !selectedVideo && (
+        {!isLoading && videos.length === 0 && !selectedVideo && activeTab === 'trends' && (
           <div className="flex flex-col items-center justify-center h-64 text-stone-400">
             <Play size={48} className="mb-4 opacity-50" />
             <p>Search or click "Find Trends" to get started</p>

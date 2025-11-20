@@ -25,6 +25,23 @@ export function AppShell() {
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
 
+  const handleStartResearch = (hookData: { title: string, hook: string, image?: string }) => {
+    const newStartNode: Node = {
+        id: 'start',
+        type: 'start',
+        position: { x: 0, y: 0 },
+        data: { 
+            label: hookData.title, 
+            content: hookData.hook,
+            imageUrl: hookData.image,
+            isLoading: false 
+        },
+    };
+    setNodes([newStartNode]);
+    setEdges([]); // Reset edges for fresh start
+    setActiveView('research');
+  };
+
   return (
     <div className="flex h-screen w-full overflow-hidden bg-stone-50">
       <Sidebar 
@@ -35,7 +52,7 @@ export function AppShell() {
       />
       
       <main className="flex-1 h-full relative overflow-hidden">
-        {activeView === 'hook' && <HookGenerator />}
+        {activeView === 'hook' && <HookGenerator onStartResearch={handleStartResearch} />}
         {activeView === 'research' && (
           <ResearchFlow 
             nodes={nodes}

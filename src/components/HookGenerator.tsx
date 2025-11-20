@@ -1,7 +1,7 @@
 'use client';
 
-import React, { useState } from 'react';
-import { Sparkles, RefreshCw, Play, Search, ThumbsUp, Loader2, Check, X, Image as ImageIcon, ArrowLeft, Plus, BarChart2, TrendingUp, Activity } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { Sparkles, RefreshCw, Play, Search, ThumbsUp, Loader2, Check, X, Image as ImageIcon, ArrowLeft, Plus, BarChart2, TrendingUp, Activity, Eye, Heart, Users } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card } from '@/components/ui/card';
@@ -42,9 +42,13 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
   const [videos, setVideos] = useState<TrendingVideo[]>([]);
   const [nextPageToken, setNextPageToken] = useState<string | null>(null);
   const [selectedVideo, setSelectedVideo] = useState<TrendingVideo | null>(null);
+  const [previewVideo, setPreviewVideo] = useState<TrendingVideo | null>(null); // New state for modal
   const [generatedHooks, setGeneratedHooks] = useState<HookIdea[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [filter, setFilter] = useState<string>('');
+  
+  // For graph scaling
+  const containerRef = useRef<HTMLDivElement>(null);
 
   const fetchTrends = async (token?: string | null, reset = false) => {
     setIsLoading(true);
@@ -75,6 +79,8 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
   const generateHooks = async (video: TrendingVideo, useLiked = false) => {
     setIsLoading(true);
     if (!useLiked) setSelectedVideo(video);
+    // Close preview if expanding into full hook generation
+    setPreviewVideo(null);
     
     const likedHooks = useLiked ? generatedHooks.filter(h => h.liked) : [];
     
@@ -168,8 +174,22 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
   };
 
   // --- Outlier Graph Logic ---
+  // Calculate exponential/logarithmic scales for visualization
   const maxViews = Math.max(...videos.map(v => parseInt(v.viewCount) || 0), 1);
   const maxOutlier = Math.max(...videos.map(v => v.outlierScore || 0), 1);
+  const minViews = Math.min(...videos.map(v => parseInt(v.viewCount) || 0), maxViews);
+  const minOutlier = Math.min(...videos.map(v => v.outlierScore || 0), maxOutlier);
+
+  // Helper for log scale positioning (0-100%)
+  const getLogPos = (value: number, min: number, max: number) => {
+      if (value <= 0) return 0;
+      const logVal = Math.log(value);
+      const logMin = Math.log(Math.max(min, 1));
+      const logMax = Math.log(Math.max(max, 1));
+      const range = logMax - logMin;
+      if (range === 0) return 50;
+      return ((logVal - logMin) / range) * 100;
+  };
 
   return (
     <div className="h-full flex flex-col bg-stone-50 overflow-hidden">
@@ -206,6 +226,7 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
                         onKeyDown={(e) => e.key === 'Enter' && fetchTrends(null, true)}
+                        className="text-stone-900 placeholder-stone-500 font-medium"
                     />
                     <Button onClick={() => fetchTrends(null, true)} disabled={isLoading}>
                         {isLoading ? <Loader2 className="animate-spin mr-2" /> : <Search className="mr-2" size={18} />}
@@ -245,7 +266,7 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto p-6 relative">
+      <div className="flex-1 overflow-y-auto p-6 relative" ref={containerRef}>
         {!selectedVideo ? (
           <>
             {activeTab === 'trends' && (
@@ -254,12 +275,12 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
                         {videos.map((video) => {
                             const virality = getViralityScore(video);
                             return (
-                            <Card key={video.id} className="overflow-hidden hover:shadow-lg transition-shadow cursor-pointer group flex flex-col" onClick={() => generateHooks(video)}>
+                            <Card key={video.id} className="overflow-hidden hover:shadow-lg transition-shadow cursor-pointer group flex flex-col" onClick={() => setPreviewVideo(video)}>
                                 <div className="relative aspect-video bg-stone-200">
                                 <img src={video.thumbnail} alt={video.title} className="w-full h-full object-cover" />
                                 <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
                                     <Button variant="secondary" className="opacity-0 group-hover:opacity-100 transition-opacity">
-                                    <Sparkles className="mr-2" size={16} /> Generate Hooks
+                                    <Eye className="mr-2" size={16} /> Preview
                                     </Button>
                                 </div>
                                 {virality && (
@@ -305,14 +326,14 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
                             <div className="absolute left-12 bottom-12 right-8 top-8 border-l border-b border-stone-300">
                                 {/* Y Label */}
                                 <div className="absolute -left-10 top-1/2 -translate-y-1/2 -rotate-90 text-xs font-bold text-stone-500 tracking-wider">
-                                    POPULARITY (VIEWS)
+                                    POPULARITY (Log Scale)
                                 </div>
                                 {/* X Label */}
                                 <div className="absolute bottom-[-30px] left-1/2 -translate-x-1/2 text-xs font-bold text-stone-500 tracking-wider">
-                                    OUTLIER SCORE (Performance vs Channel Avg)
+                                    OUTLIER SCORE (Log Scale)
                                 </div>
 
-                                {/* Grid Lines (Optional) */}
+                                {/* Grid Lines */}
                                 <div className="absolute left-0 top-1/4 w-full h-px bg-stone-100" />
                                 <div className="absolute left-0 top-2/4 w-full h-px bg-stone-100" />
                                 <div className="absolute left-0 top-3/4 w-full h-px bg-stone-100" />
@@ -320,9 +341,15 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
                                 {/* Bubbles */}
                                 <AnimatePresence>
                                     {videos.map((video) => {
-                                        const x = Math.min(Math.max(((video.outlierScore || 0) / maxOutlier) * 100, 2), 98);
-                                        const y = Math.min(Math.max((parseInt(video.viewCount) / maxViews) * 100, 2), 98);
-                                        const size = 40 + Math.min((parseInt(video.viewCount) / maxViews) * 40, 40); // Size between 40px and 80px
+                                        // Use Logarithmic scale for better distribution
+                                        const xRaw = getLogPos(video.outlierScore || 1, minOutlier, maxOutlier);
+                                        const yRaw = getLogPos(parseInt(video.viewCount), minViews, maxViews);
+                                        
+                                        // Clamp to ensure they stay within the visual box (adding padding)
+                                        const x = Math.min(Math.max(xRaw, 2), 98);
+                                        const y = Math.min(Math.max(yRaw, 2), 98);
+                                        
+                                        const size = 40 + Math.min((parseInt(video.viewCount) / maxViews) * 60, 60); // Size between 40px and 100px
 
                                         return (
                                             <motion.div
@@ -336,18 +363,23 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
                                                     width: size,
                                                     height: size
                                                 }}
-                                                onClick={() => generateHooks(video)}
-                                                whileHover={{ scale: 1.5 }}
+                                                onClick={() => setPreviewVideo(video)}
+                                                whileHover={{ scale: 1.2, zIndex: 100 }}
                                             >
-                                                <div className="w-full h-full rounded-full overflow-hidden border-2 border-white shadow-lg relative">
-                                                    <img src={video.thumbnail} className="w-full h-full object-cover" />
+                                                <div className="w-full h-full rounded-full overflow-hidden border-2 border-white shadow-lg relative bg-stone-200">
+                                                    <img src={video.thumbnail} className="w-full h-full object-cover" alt={video.title} />
                                                 </div>
                                                 
-                                                {/* Tooltip */}
-                                                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-48 bg-stone-900 text-white text-xs p-2 rounded pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity z-50">
-                                                    <p className="font-bold line-clamp-2">{video.title}</p>
-                                                    <p className="text-stone-300 mt-1">{parseInt(video.viewCount).toLocaleString()} views</p>
-                                                    <p className="text-green-400">{video.outlierScore?.toFixed(1)}x Outlier Score</p>
+                                                {/* Tooltip - Smart Positioning */}
+                                                <div className={cn(
+                                                    "absolute left-1/2 -translate-x-1/2 w-56 bg-stone-900 text-white text-xs p-3 rounded-lg shadow-xl pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity z-50 flex flex-col gap-1",
+                                                    y > 50 ? "bottom-full mb-2" : "top-full mt-2" // Flip based on vertical position
+                                                )}>
+                                                    <p className="font-bold line-clamp-2 text-sm">{video.title}</p>
+                                                    <div className="flex justify-between text-stone-400 mt-1">
+                                                        <span>{parseInt(video.viewCount).toLocaleString()} views</span>
+                                                        <span className="text-green-400 font-bold">{video.outlierScore?.toFixed(1)}x Outlier</span>
+                                                    </div>
                                                 </div>
                                             </motion.div>
                                         );
@@ -365,8 +397,8 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
             <div className="flex flex-col md:flex-row gap-6 items-start p-6 bg-white rounded-xl border border-stone-200 shadow-sm">
               <img src={selectedVideo.thumbnail} alt={selectedVideo.title} className="w-full md:w-64 rounded-lg shadow-md" />
               <div className="flex-1">
-                <h2 className="text-2xl font-bold mb-2">{selectedVideo.title}</h2>
-                <p className="text-stone-600 mb-4 flex items-center gap-2">
+                <h2 className="text-2xl font-bold mb-2 text-stone-900">{selectedVideo.title}</h2>
+                <p className="text-stone-600 mb-4 flex items-center gap-2 text-sm font-medium">
                     {selectedVideo.channelTitle} 
                     <span className="text-stone-300">•</span> 
                     {parseInt(selectedVideo.viewCount).toLocaleString()} views
@@ -382,9 +414,9 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
                         </span>
                     )}
                 </p>
-                <p className="text-sm text-stone-500 mb-6 line-clamp-3 max-w-2xl">{selectedVideo.description}</p>
+                <p className="text-sm text-stone-700 mb-6 line-clamp-3 max-w-2xl leading-relaxed">{selectedVideo.description}</p>
                 
-                <Button onClick={() => generateHooks(selectedVideo, true)} disabled={isLoading}>
+                <Button onClick={() => generateHooks(selectedVideo, true)} disabled={isLoading} className="font-medium">
                   <RefreshCw className={`mr-2 ${isLoading ? 'animate-spin' : ''}`} size={16} />
                   Regenerate from Checked
                 </Button>
@@ -394,8 +426,8 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
             {/* Hooks Grid */}
             <div className="space-y-4">
               <div className="flex items-center justify-between">
-                  <h3 className="text-lg font-semibold">Generated Concepts</h3>
-                  <span className="text-sm text-stone-500">{generatedHooks.length} ideas found</span>
+                  <h3 className="text-lg font-semibold text-stone-900">Generated Concepts</h3>
+                  <span className="text-sm text-stone-500 font-medium">{generatedHooks.length} ideas found</span>
               </div>
               
               <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
@@ -426,16 +458,16 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
 
                     <div className="space-y-4 mt-2 flex-1">
                       <div>
-                        <span className="text-xs font-semibold uppercase tracking-wider text-stone-500">Title</span>
-                        <p className="text-lg font-medium leading-tight mt-1">{hook.title}</p>
+                        <span className="text-xs font-bold uppercase tracking-wider text-stone-500">Title</span>
+                        <p className="text-lg font-bold leading-tight mt-1 text-stone-900">{hook.title}</p>
                       </div>
                       <div>
-                        <span className="text-xs font-semibold uppercase tracking-wider text-stone-500">Hook</span>
-                        <p className="text-stone-700 mt-1 text-sm">{hook.hook}</p>
+                        <span className="text-xs font-bold uppercase tracking-wider text-stone-500">Hook</span>
+                        <p className="text-stone-700 mt-1 text-sm leading-relaxed font-medium">{hook.hook}</p>
                       </div>
                       <div>
-                        <span className="text-xs font-semibold uppercase tracking-wider text-stone-500 block mb-2">Thumbnail Concept</span>
-                        <p className="text-xs text-stone-500 italic mb-3">{hook.thumbnailConcept}</p>
+                        <span className="text-xs font-bold uppercase tracking-wider text-stone-500 block mb-2">Thumbnail Concept</span>
+                        <p className="text-xs text-stone-600 italic mb-3">{hook.thumbnailConcept}</p>
                         
                         {hook.generatedImages && hook.generatedImages.length > 0 ? (
                              <div className="space-y-2">
@@ -507,6 +539,82 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
             <p>Search or click "Find Trends" to get started</p>
           </div>
         )}
+
+        {/* Video Preview Modal */}
+        <AnimatePresence>
+            {previewVideo && (
+                <motion.div 
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4"
+                    onClick={() => setPreviewVideo(null)}
+                >
+                    <motion.div 
+                        initial={{ scale: 0.95, opacity: 0 }}
+                        animate={{ scale: 1, opacity: 1 }}
+                        exit={{ scale: 0.95, opacity: 0 }}
+                        className="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="relative aspect-video bg-black">
+                             <iframe 
+                                width="100%" 
+                                height="100%" 
+                                src={`https://www.youtube.com/embed/${previewVideo.id}?autoplay=1`} 
+                                title={previewVideo.title} 
+                                frameBorder="0" 
+                                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
+                                allowFullScreen
+                                className="w-full h-full"
+                            />
+                            <button 
+                                onClick={() => setPreviewVideo(null)}
+                                className="absolute top-4 right-4 p-2 bg-black/50 hover:bg-black/70 text-white rounded-full transition-colors"
+                            >
+                                <X size={20} />
+                            </button>
+                        </div>
+                        
+                        <div className="p-6 overflow-y-auto">
+                            <h2 className="text-2xl font-bold text-stone-900 mb-2">{previewVideo.title}</h2>
+                            <div className="flex flex-wrap gap-4 text-sm text-stone-600 mb-4">
+                                <span className="flex items-center gap-1 font-medium text-stone-900">
+                                    <Users size={16} /> {previewVideo.channelTitle}
+                                </span>
+                                <span className="flex items-center gap-1">
+                                    <Eye size={16} /> {parseInt(previewVideo.viewCount).toLocaleString()} views
+                                </span>
+                                {previewVideo.likeCount && (
+                                    <span className="flex items-center gap-1">
+                                        <Heart size={16} /> {parseInt(previewVideo.likeCount).toLocaleString()} likes
+                                    </span>
+                                )}
+                                {previewVideo.outlierScore && (
+                                     <span className="flex items-center gap-1 text-green-600 font-bold bg-green-50 px-2 py-0.5 rounded">
+                                        <Activity size={16} /> {previewVideo.outlierScore}x Outlier
+                                    </span>
+                                )}
+                            </div>
+                            
+                            <div className="bg-stone-50 p-4 rounded-lg mb-6 border border-stone-100">
+                                <h3 className="text-xs font-bold uppercase text-stone-500 mb-2">Description</h3>
+                                <p className="text-sm text-stone-700 whitespace-pre-wrap font-medium leading-relaxed">{previewVideo.description?.slice(0, 500)}...</p>
+                            </div>
+
+                            <div className="flex justify-end gap-3">
+                                <Button variant="ghost" onClick={() => setPreviewVideo(null)}>
+                                    Close
+                                </Button>
+                                <Button onClick={() => generateHooks(previewVideo)}>
+                                    <Sparkles className="mr-2" size={16} /> Generate Hooks
+                                </Button>
+                            </div>
+                        </div>
+                    </motion.div>
+                </motion.div>
+            )}
+        </AnimatePresence>
       </div>
     </div>
   );

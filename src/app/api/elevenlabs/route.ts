@@ -18,16 +18,20 @@ export async function POST(req: NextRequest) {
         apiKey: apiKey,
     });
 
+    // ElevenLabs SDK expects camelCase option names
     const audioStream = await client.textToSpeech.convert(voiceId, {
-        output_format: "mp3_44100_128",
-        text: text,
-        model_id: "eleven_multilingual_v2",
+        outputFormat: "mp3_44100_128",
+        text,
+        modelId: "eleven_multilingual_v2",
     });
 
-    // stream to buffer
-    const chunks: Uint8Array[] = [];
-    for await (const chunk of audioStream) {
-        chunks.push(chunk);
+    // Convert the web ReadableStream into a single Buffer
+    const reader = audioStream.getReader();
+    const chunks: Buffer[] = [];
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done || !value) break;
+      chunks.push(Buffer.from(value));
     }
     const audioBuffer = Buffer.concat(chunks);
 

@@ -34,7 +34,7 @@ export async function POST(req: Request) {
       tools: {
         generateStoryboard: tool({
           description: 'Generate a structured storyboard with scenes. Use this when the user has agreed on a direction.',
-          parameters: z.object({
+          inputSchema: z.object({
             title: z.string(),
             scenes: z.array(z.object({
                id: z.string(),
@@ -48,7 +48,7 @@ export async function POST(req: Request) {
       },
     });
 
-    return result.toDataStreamResponse();
+    return result.toTextStreamResponse();
 
   } catch (error) {
     console.error('Storyboard API Error:', error);

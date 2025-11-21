@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { useNodesState, useEdgesState, Node } from '@xyflow/react';
+import { useNodesState, useEdgesState, Node, Edge } from '@xyflow/react';
 import { Sidebar } from './Sidebar';
 import ResearchFlow from './ResearchFlow';
 import { Storyboard } from './Storyboard';
@@ -22,8 +22,8 @@ export function AppShell() {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
 
   // Lifted state for ResearchFlow
-  const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
-  const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+  const [nodes, setNodes, onNodesChange] = useNodesState<Node>(initialNodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [sessionName, setSessionName] = useState<string | null>(null);
 
   const handleStartResearch = (hookData: { title: string, hook: string, image?: string }) => {

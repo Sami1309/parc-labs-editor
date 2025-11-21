@@ -19,3 +19,13 @@ export interface Message {
   role: 'user' | 'assistant';
   content: string;
 }
+
+export interface SavedStoryboardSession {
+  id: string;
+  name: string;
+  storyboard: StoryboardScene[];
+  messages: Message[];
+  selectedNodeIds?: string[];
+  selectedNodeId?: string; // legacy support
+  timestamp: number;
+}

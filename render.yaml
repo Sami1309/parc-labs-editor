@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: gemini-test-2
+    env: node
+    plan: free
+    region: oregon
+    rootDir: .
+    buildCommand: npm ci && npm run build
+    startCommand: npm run start
+    autoDeploy: true
+    pullRequestPreviewsEnabled: true
+    healthCheckPath: /
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: GOOGLE_GENERATIVE_AI_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: EXA_API_KEY
+        sync: false
+      - key: YOUTUBE_API_KEY
+        sync: false
+      - key: ELEVENLABS_API_KEY
+        sync: false

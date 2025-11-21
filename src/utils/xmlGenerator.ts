@@ -64,3 +64,4 @@ export function generateFCPXML(timeline: TimelineItem[], projectName: string = "
   return xml;
 }
 
+

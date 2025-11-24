@@ -2,10 +2,11 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { Node } from '@xyflow/react';
-import { Send, Sparkles, Image as ImageIcon, FileText, Loader2, Save, Layout, Trash2, FolderOpen, ChevronDown, Maximize2, CheckCircle2, PlusCircle } from 'lucide-react';
-import { motion } from 'framer-motion';
+import { Send, Sparkles, Image as ImageIcon, FileText, Loader2, Save, Layout, Trash2, FolderOpen, ChevronDown, Maximize2, CheckCircle2, PlusCircle, Edit2, Play, Info } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
 import ReactMarkdown from 'react-markdown';
 import { StoryboardScene, Message, SavedStoryboardSession } from '@/types';
+import { RefineAssetFlow } from './RefineAssetFlow';
 
 interface StoryboardProps {
   researchNodes: Node[];
@@ -16,6 +17,10 @@ export function Storyboard({ researchNodes }: StoryboardProps) {
   const [storyboard, setStoryboard] = useState<StoryboardScene[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
   const [generationStep, setGenerationStep] = useState<string | null>(null);
+  
+  // Refinement State
+  const [refiningScene, setRefiningScene] = useState<{ scene: StoryboardScene; index: number } | null>(null);
+  const [viewingScene, setViewingScene] = useState<{ scene: StoryboardScene; index: number } | null>(null);
   
   // Manual Chat State
   const [messages, setMessages] = useState<Message[]>([
@@ -265,8 +270,169 @@ export function Storyboard({ researchNodes }: StoryboardProps) {
       }
   };
 
+  const handleUpdateSceneImage = (newImage: string | undefined) => {
+      if (!refiningScene || !newImage) return;
+      
+      const newStoryboard = [...storyboard];
+      newStoryboard[refiningScene.index] = {
+          ...newStoryboard[refiningScene.index],
+          image: newImage
+      };
+      setStoryboard(newStoryboard);
+      setRefiningScene(null); // Return to storyboard
+  };
+  
+  const handleUpdateSceneMotion = (motionSvg: string | undefined) => {
+        if (!refiningScene || !motionSvg) return;
+        
+        const newStoryboard = [...storyboard];
+        newStoryboard[refiningScene.index] = {
+            ...newStoryboard[refiningScene.index],
+            // Store motion svg in image field for now (or separate field if DB supports)
+            // For now assuming image field handles SVG data URI or similar
+            image: `data:image/svg+xml;base64,${btoa(motionSvg)}`,
+            // Or ideally: motionGraphic: motionSvg
+            // But let's stick to 'image' prop being the visual source for simplicity unless we change types
+        };
+        // If we want to support raw SVG string rendering:
+        // We might need to extend StoryboardScene type to support 'visualContent' or 'visualType'
+        
+        // Let's assume we update the image to be the SVG data URI for now so it renders in img tag (static) or object tag
+        // Ideally we pass the raw SVG content.
+        
+        // HACK: Store raw SVG in a new property if we can, or just update the image prop.
+        // Let's just update the image prop with the Data URI for consistent rendering.
+        setStoryboard(newStoryboard);
+        setRefiningScene(null);
+  };
+
+  if (refiningScene) {
+      return (
+          <RefineAssetFlow
+            onBack={() => setRefiningScene(null)}
+            contextBefore={refiningScene.index > 0 ? storyboard[refiningScene.index - 1].text : undefined}
+            contextAfter={refiningScene.index < storyboard.length - 1 ? storyboard[refiningScene.index + 1].text : undefined}
+            globalContext={`Storyboard Session: ${sessionName || 'Untitled'}`}
+            prevImage={refiningScene.index > 0 ? storyboard[refiningScene.index - 1].image : undefined}
+            nextImage={refiningScene.index < storyboard.length - 1 ? storyboard[refiningScene.index + 1].image : undefined}
+            assetType="image"
+            // Pass a callback to save result
+            onSave={(result: string, type: 'image' | 'motion') => {
+                 // Update the timeline
+                 const newStoryboard = [...storyboard];
+                 const updatedScene = { ...newStoryboard[refiningScene.index] };
+                 
+                 if (type === 'motion') {
+                     // Encode SVG to Data URI for portable storage in the 'image' field for now
+                     // Or better, if we update types, store as raw content.
+                     // For SVG to be playable in img tag it needs to be animated SVG (SMIL/CSS).
+                     updatedScene.image = result.startsWith('<svg') 
+                        ? `data:image/svg+xml;base64,${btoa(result)}` 
+                        : result; 
+                 } else {
+                     updatedScene.image = result;
+                 }
+                 
+                 newStoryboard[refiningScene.index] = updatedScene;
+                 setStoryboard(newStoryboard);
+                 setRefiningScene(null);
+            }}
+          />
+      );
+  }
+
   return (
-    <div className="flex h-full w-full bg-stone-50">
+    <div className="flex h-full w-full bg-stone-50 relative">
+      {/* Context View Modal */}
+      <AnimatePresence>
+        {viewingScene && (
+            <motion.div 
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="absolute inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-8"
+                onClick={() => setViewingScene(null)}
+            >
+                <motion.div 
+                    initial={{ scale: 0.9, opacity: 0 }}
+                    animate={{ scale: 1, opacity: 1 }}
+                    exit={{ scale: 0.9, opacity: 0 }}
+                    className="bg-stone-900 rounded-2xl border border-stone-700 shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col md:flex-row"
+                    onClick={(e) => e.stopPropagation()}
+                >
+                    {/* Visual Section */}
+                    <div className="md:w-2/3 bg-black flex items-center justify-center relative group">
+                        {viewingScene.scene.image ? (
+                            <img src={viewingScene.scene.image} alt="Scene" className="w-full h-full object-contain" />
+                        ) : (
+                            <div className="text-stone-600 flex flex-col items-center">
+                                <ImageIcon size={48} className="mb-2 opacity-50" />
+                                <span className="text-sm">No Visual Asset</span>
+                            </div>
+                        )}
+                        
+                        {/* Overlay Actions */}
+                         <div className="absolute top-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button 
+                                onClick={() => {
+                                    setRefiningScene(viewingScene);
+                                    setViewingScene(null);
+                                }}
+                                className="bg-purple-600 hover:bg-purple-700 text-white px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-2 shadow-lg"
+                            >
+                                <Sparkles size={14} />
+                                Refine Asset
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* Context Section */}
+                    <div className="md:w-1/3 p-6 flex flex-col border-l border-stone-800 bg-stone-900">
+                        <div className="mb-6">
+                            <h3 className="text-stone-400 text-xs font-bold uppercase tracking-wider mb-2">Scene {viewingScene.index + 1} Context</h3>
+                            <div className="prose prose-sm prose-invert max-w-none">
+                                <p className="text-stone-300 leading-relaxed text-sm">
+                                    {viewingScene.scene.text}
+                                </p>
+                            </div>
+                        </div>
+
+                        {viewingScene.scene.notes && (
+                            <div className="mb-6 bg-yellow-900/20 border border-yellow-700/30 p-3 rounded-lg">
+                                <div className="flex items-center gap-2 text-yellow-500 mb-1 text-xs font-bold uppercase tracking-wider">
+                                    <Info size={12} />
+                                    Director's Notes
+                                </div>
+                                <p className="text-yellow-200/80 text-xs leading-relaxed">
+                                    {viewingScene.scene.notes}
+                                </p>
+                            </div>
+                        )}
+
+                        <div className="mt-auto pt-6 border-t border-stone-800 flex justify-between items-center">
+                            <button 
+                                onClick={() => setViewingScene(null)}
+                                className="text-stone-500 hover:text-stone-300 text-sm"
+                            >
+                                Close
+                            </button>
+                            <button 
+                                onClick={() => {
+                                    setRefiningScene(viewingScene);
+                                    setViewingScene(null);
+                                }}
+                                className="text-purple-400 hover:text-purple-300 text-sm font-medium flex items-center gap-2"
+                            >
+                                <Edit2 size={14} />
+                                Edit & Refine
+                            </button>
+                        </div>
+                    </div>
+                </motion.div>
+            </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Left Panel: Chat */}
       <div className="w-1/3 min-w-[350px] border-r border-stone-200 flex flex-col bg-white">
         <div className="p-4 border-b border-stone-100 flex items-center justify-between bg-stone-50/50">
@@ -498,7 +664,8 @@ export function Storyboard({ researchNodes }: StoryboardProps) {
                         animate={{ opacity: 1, y: 0 }}
                         transition={{ delay: idx * 0.1 }}
                         key={scene.id || idx} 
-                        className="bg-white rounded-xl border border-stone-200 shadow-sm overflow-hidden flex flex-col md:flex-row group hover:shadow-md transition-shadow"
+                        className="bg-white rounded-xl border border-stone-200 shadow-sm overflow-hidden flex flex-col md:flex-row group hover:shadow-md transition-shadow cursor-pointer"
+                        onDoubleClick={() => setViewingScene({ scene, index: idx })}
                       >
                         <div className="md:w-1/3 bg-stone-100 relative min-h-[150px]">
                           {scene.image ? (
@@ -507,13 +674,21 @@ export function Storyboard({ researchNodes }: StoryboardProps) {
                              <div className="absolute inset-0 flex items-center justify-center text-stone-300 bg-stone-50">
                                <div className="text-center p-4">
                                    <ImageIcon className="w-6 h-6 mx-auto mb-2 opacity-50" />
-                                   <span className="text-[10px]">No image</span>
+                                   <span className="text-[10px]">Double Click to Add Visual</span>
                                </div>
                              </div>
                           )}
                           <div className="absolute top-2 left-2 bg-black/60 text-white text-[10px] font-bold px-2 py-1 rounded backdrop-blur-sm uppercase tracking-wider">
                             Scene {idx + 1}
                           </div>
+                          
+                           {/* Hover hint for double click */}
+                           <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                                <span className="text-white text-xs font-medium flex items-center gap-1">
+                                    <Maximize2 size={12} />
+                                    View & Refine
+                                </span>
+                           </div>
                         </div>
                         <div className="md:w-2/3 p-5 flex flex-col justify-center">
                            <div className="prose prose-sm text-stone-600 mb-3">

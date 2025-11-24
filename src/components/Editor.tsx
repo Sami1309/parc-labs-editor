@@ -847,6 +847,9 @@ export function Editor() {
       const currentIdx = activeItem ? timeline.findIndex(t => t.id === activeItem.id) : -1;
       const before = currentIdx > 0 ? timeline[currentIdx - 1].text : undefined;
       const after = currentIdx !== -1 && currentIdx < timeline.length - 1 ? timeline[currentIdx + 1].text : undefined;
+      const prevImage = currentIdx > 0 ? timeline[currentIdx - 1].image : undefined;
+      const nextImage = currentIdx !== -1 && currentIdx < timeline.length - 1 ? timeline[currentIdx + 1].image : undefined;
+      const globalContext = timeline.map(t => t.text).join('. ');
 
       return (
           <RefineAssetFlow 
@@ -856,6 +859,9 @@ export function Editor() {
               }}
               contextBefore={before}
               contextAfter={after}
+              prevImage={prevImage}
+              nextImage={nextImage}
+              globalContext={globalContext}
               assetFile={assetToRefine || undefined}
               assetType={assetToRefine?.type.startsWith('video') ? 'video' : 'image'}
           />

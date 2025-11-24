@@ -17,7 +17,7 @@ export async function POST(req: NextRequest) {
     const mimeType = file.type;
 
     const result = await generateText({
-      model: google('models/gemini-3-pro-preview'),
+      model: google('models/gemini-2.0-flash-exp'),
       messages: [
         {
           role: 'user',

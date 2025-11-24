@@ -100,7 +100,6 @@ export async function POST(req: NextRequest) {
             model,
             config: {
                 responseModalities: ['IMAGE'],
-                aspectRatio: aspectRatio === '16:9' ? '16:9' : undefined, 
             },
             contents,
         });

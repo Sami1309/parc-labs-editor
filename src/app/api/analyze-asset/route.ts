@@ -23,7 +23,7 @@ export async function POST(req: NextRequest) {
           role: 'user',
           content: [
             { type: 'text', text: 'Analyze this asset for a video editor context. Briefly describe the visual content, mood, and potential use cases in a video sequence. Keep it concise (under 50 words).' },
-            { type: 'image', image: base64, mimeType: mimeType as any }, // Cast to any to avoid type issues if sdk types are strict, though mimeType string usually works
+            { type: 'image', image: `data:${mimeType};base64,${base64}` },
           ],
         },
       ],

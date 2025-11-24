@@ -159,6 +159,10 @@ export function Editor() {
   const current = getCurrentItem();
   const activeItem = current?.item;
 
+  const activeItemIdx = activeItem ? timeline.findIndex(t => t.id === activeItem.id) : -1;
+  const activeContextBefore = activeItemIdx > 0 ? timeline[activeItemIdx - 1].text : undefined;
+  const activeContextAfter = activeItemIdx !== -1 && activeItemIdx < timeline.length - 1 ? timeline[activeItemIdx + 1].text : undefined;
+
   // Audio Sync Effect
   useEffect(() => {
       if (!audioRef.current) return;
@@ -774,16 +778,16 @@ export function Editor() {
     'static': { scale: 1 }
   };
 
-  const handleRefineRequest = (file: File) => {
-      setAssetToRefine(file);
+  const handleRefineRequest = (file?: File) => {
+      setAssetToRefine(file || null);
       setEditorMode('refine');
   };
 
-  if (editorMode === 'refine' && assetToRefine) {
-      // Determine context for the currently active item (or the one we are editing)
-      const currentIdx = timeline.findIndex(t => t.id === activeItem?.id);
+  if (editorMode === 'refine') {
+      // Determine context for the currently active item
+      const currentIdx = activeItem ? timeline.findIndex(t => t.id === activeItem.id) : -1;
       const before = currentIdx > 0 ? timeline[currentIdx - 1].text : undefined;
-      const after = currentIdx < timeline.length - 1 ? timeline[currentIdx + 1].text : undefined;
+      const after = currentIdx !== -1 && currentIdx < timeline.length - 1 ? timeline[currentIdx + 1].text : undefined;
 
       return (
           <RefineAssetFlow 
@@ -793,8 +797,8 @@ export function Editor() {
               }}
               contextBefore={before}
               contextAfter={after}
-              assetFile={assetToRefine}
-              assetType={assetToRefine.type.startsWith('video') ? 'video' : 'image'}
+              assetFile={assetToRefine || undefined}
+              assetType={assetToRefine?.type.startsWith('video') ? 'video' : 'image'}
           />
       );
   }
@@ -864,9 +868,18 @@ export function Editor() {
       </div>
 
         {/* Preview Area */}
-        <div className="flex-1 bg-black flex items-center justify-center relative p-4 overflow-hidden">
+        <div className="flex-1 bg-black flex items-center justify-center relative p-4 overflow-hidden min-h-0">
              {activeItem ? (
-                 <div className="aspect-video bg-stone-900 w-full max-w-4xl relative overflow-hidden shadow-2xl border border-stone-800 rounded-lg">
+                 <div className="bg-stone-900 shadow-2xl border border-stone-800 rounded-lg relative overflow-hidden" 
+                      style={{ 
+                          aspectRatio: '16/9',
+                          width: 'auto',
+                          height: 'auto',
+                          maxWidth: '100%',
+                          maxHeight: '100%',
+                          flex: '0 0 auto'
+                      }}
+                 >
                     <AnimatePresence mode='wait'>
                         {activeItem.type === 'empty' ? (
                             <motion.div
@@ -879,6 +892,8 @@ export function Editor() {
                                 <ContextInput 
                                     onContextSubmit={handleContextSubmit} 
                                     onRefineAsset={handleRefineRequest}
+                                    priorContext={activeContextBefore}
+                                    nextContext={activeContextAfter}
                                 />
                             </motion.div>
                         ) : (

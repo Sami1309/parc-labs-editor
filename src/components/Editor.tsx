@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { SavedStoryboardSession, TimelineItem } from '@/types';
-import { Play, Pause, Plus, Image as ImageIcon, Mic, Sparkles, Save, Download, Settings, Music, Video, FolderOpen, ChevronDown, Loader2, Wand2, Maximize2, FileCode, Wand, MoveHorizontal, X, Edit3, Trash2, PanelRightOpen, PanelRightClose, ZoomIn, ZoomOut, GripVertical } from 'lucide-react';
+import { Play, Pause, Plus, Image as ImageIcon, Mic, Sparkles, Save, Download, Settings, Music, Video, FolderOpen, ChevronDown, ChevronUp, Loader2, Wand2, Maximize2, FileCode, Wand, MoveHorizontal, X, Edit3, Trash2, PanelRightOpen, PanelRightClose, ZoomIn, ZoomOut, GripVertical, MessageSquare } from 'lucide-react';
 import { motion, Reorder, AnimatePresence } from 'framer-motion';
 import { generateFCPXML } from '@/utils/xmlGenerator';
 import { AgentSidebar } from './AgentSidebar';
@@ -39,6 +39,21 @@ export function Editor() {
   const [agentTrace, setAgentTrace] = useState('');
   const [agentOptions, setAgentOptions] = useState<any[]>([]);
   const [isProcessingContext, setIsProcessingContext] = useState(false);
+
+  // Global Edit State
+  const [isGlobalPromptOpen, setIsGlobalPromptOpen] = useState(true);
+  const [globalPrompt, setGlobalPrompt] = useState('');
+  
+  // Asset Generation Options
+  const [assetOptions, setAssetOptions] = useState({
+      style: 'Cinematic',
+      addEffects: false,
+      autoPan: false
+  });
+  const [showAssetMenu, setShowAssetMenu] = useState(false);
+
+  const [showSaveModal, setShowSaveModal] = useState(false);
+  const [saveName, setSaveName] = useState('');
 
   // Keyboard Shortcuts (Spacebar Play/Pause, Delete)
   useEffect(() => {
@@ -130,14 +145,14 @@ export function Editor() {
 
   // Load Saved Sessions
   useEffect(() => {
-    const saved = localStorage.getItem('storyboard_sessions');
-    if (saved) {
-      try {
-        setSavedSessions(JSON.parse(saved));
-      } catch (e) {
-        console.error('Failed to parse saved sessions', e);
-      }
-    }
+    fetch('/api/sessions')
+      .then(res => res.json())
+      .then(data => {
+        if (Array.isArray(data)) {
+          setSavedSessions(data);
+        }
+      })
+      .catch(e => console.error('Failed to load sessions', e));
   }, []);
 
   const totalDuration = Math.max(timeline.reduce((acc, item) => acc + item.duration, 0), 10) + 10; // Extra 10s at end
@@ -202,13 +217,55 @@ export function Editor() {
       return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}:${ms.toString().padStart(2, '0')}`;
   };
 
+  const saveCurrentSession = () => {
+      setSaveName(`Edit ${new Date().toLocaleTimeString()}`);
+      setShowSaveModal(true);
+  };
+
+  const handleSaveConfirm = async () => {
+      if (!saveName) return;
+
+      const session: SavedStoryboardSession = {
+          id: Date.now().toString(),
+          name: saveName,
+          // @ts-ignore
+          storyboard: timeline,
+          messages: [], 
+          timestamp: Date.now(),
+          type: 'edit'
+      };
+      
+      try {
+        const res = await fetch('/api/sessions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(session)
+        });
+
+        if (res.ok) {
+            setSavedSessions(prev => [session, ...prev]);
+            setShowSaveModal(false);
+        } else {
+            alert("Failed to save session (Server Error)");
+        }
+      } catch (e) {
+          console.error(e);
+          alert("Failed to save session");
+      }
+  };
+
   const importSession = (session: SavedStoryboardSession) => {
-    const newItems: TimelineItem[] = session.storyboard.map(scene => ({
-      ...scene,
-      duration: 5, // Default 5 seconds per scene
-      transition: 'cut',
-      type: 'scene'
-    }));
+    const newItems: TimelineItem[] = session.storyboard.map(scene => {
+      const existing = scene as TimelineItem;
+      return {
+        ...scene,
+        duration: existing.duration || 5, 
+        transition: existing.transition || 'cut',
+        type: existing.type || 'scene',
+        effect: existing.effect,
+        audioUrl: existing.audioUrl
+      };
+    });
     
     setTimeline(prev => [...prev, ...newItems]);
     setShowLoadMenu(false);
@@ -461,8 +518,10 @@ export function Editor() {
         let needsUpdate = false;
         const updates: Partial<TimelineItem> = {};
 
-        if (addEffects && !item.effect) {
-             const effects: TimelineItem['effect'][] = ['zoom-in', 'zoom-out', 'pan-left', 'pan-right'];
+        if ((assetOptions.addEffects || assetOptions.autoPan) && !item.effect) {
+             const effects: TimelineItem['effect'][] = assetOptions.autoPan 
+                ? ['pan-left', 'pan-right'] 
+                : ['zoom-in', 'zoom-out', 'pan-left', 'pan-right'];
              updates.effect = effects[Math.floor(Math.random() * effects.length)];
              needsUpdate = true;
         }
@@ -479,7 +538,7 @@ export function Editor() {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ 
-                        prompt: `Cinematic shot: ${item.notes || item.text}. High quality, photorealistic, 4k.` 
+                        prompt: `${assetOptions.style} shot: ${item.notes || item.text}. High quality, 4k.` 
                     })
                 });
 
@@ -827,21 +886,57 @@ export function Editor() {
                     {/* Load Menu (Same as before) */}
                 {showLoadMenu && (
                     <div className="absolute top-full left-0 mt-2 w-64 bg-stone-800 rounded-lg shadow-xl border border-stone-700 py-2 max-h-64 overflow-y-auto z-20">
-                            {savedSessions.map(session => (
-                                <button
-                                    key={session.id}
-                                    onClick={() => importSession(session)}
-                                    className="w-full text-left px-4 py-2 text-sm text-stone-300 hover:bg-stone-700 truncate"
-                                >
-                                    {session.name}
-                                </button>
-                            ))}
+                            {/* Saved Edits Section */}
+                            <div className="px-4 py-1 text-xs font-bold text-stone-500 uppercase tracking-wider mb-1">
+                                Saved Edits
+                            </div>
+                            {savedSessions.filter(s => s.type === 'edit').length === 0 ? (
+                                <div className="px-4 py-2 text-xs text-stone-600 italic">No saved edits</div>
+                            ) : (
+                                savedSessions.filter(s => s.type === 'edit').map(session => (
+                                    <button
+                                        key={session.id}
+                                        onClick={() => importSession(session)}
+                                        className="w-full text-left px-4 py-2 text-sm text-stone-300 hover:bg-stone-700 truncate"
+                                    >
+                                        {session.name}
+                                    </button>
+                                ))
+                            )}
+
+                            <div className="h-px bg-stone-700 my-2 mx-4" />
+
+                            {/* Storyboards Section */}
+                            <div className="px-4 py-1 text-xs font-bold text-stone-500 uppercase tracking-wider mb-1">
+                                Storyboards
+                            </div>
+                            {savedSessions.filter(s => !s.type || s.type === 'storyboard').length === 0 ? (
+                                <div className="px-4 py-2 text-xs text-stone-600 italic">No storyboards</div>
+                            ) : (
+                                savedSessions.filter(s => !s.type || s.type === 'storyboard').map(session => (
+                                    <button
+                                        key={session.id}
+                                        onClick={() => importSession(session)}
+                                        className="w-full text-left px-4 py-2 text-sm text-stone-300 hover:bg-stone-700 truncate"
+                                    >
+                                        {session.name}
+                                    </button>
+                                ))
+                            )}
                     </div>
                 )}
             </div>
         </div>
         
         <div className="flex items-center gap-2">
+            <button 
+                onClick={saveCurrentSession}
+                className="p-2 hover:bg-stone-800 rounded-lg text-stone-400"
+                title="Save Session"
+            >
+                <Save className="w-4 h-4" />
+            </button>
+
                  <button 
                     onClick={() => setIsSidebarOpen(!isSidebarOpen)}
                     className={`p-2 hover:bg-stone-800 rounded-lg transition-colors ${isSidebarOpen ? 'text-purple-400' : 'text-stone-400'}`}
@@ -849,14 +944,64 @@ export function Editor() {
                 >
                     {isSidebarOpen ? <PanelRightClose className="w-4 h-4" /> : <PanelRightOpen className="w-4 h-4" />}
                 </button>
-            <button 
-                onClick={fillInAssets}
-                disabled={timeline.length === 0 || isGeneratingAssets}
-                className="flex items-center gap-2 px-3 py-1.5 bg-purple-600 text-white rounded-lg text-xs font-medium hover:bg-purple-700 disabled:opacity-50 transition-all"
-            >
-                {isGeneratingAssets ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wand2 className="w-3 h-3" />}
-                    Fill Assets
-            </button>
+            
+            <div className="relative z-50">
+                <div className="flex rounded-lg bg-purple-600 text-white overflow-hidden disabled:opacity-50">
+                    <button 
+                        onClick={fillInAssets}
+                        disabled={timeline.length === 0 || isGeneratingAssets}
+                        className="flex items-center gap-2 px-3 py-1.5 hover:bg-purple-700 transition-all border-r border-purple-700"
+                    >
+                        {isGeneratingAssets ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wand2 className="w-3 h-3" />}
+                        Fill Assets
+                    </button>
+                    <button
+                        onClick={() => setShowAssetMenu(!showAssetMenu)}
+                        className="px-1.5 hover:bg-purple-700 transition-all"
+                    >
+                        <ChevronDown className="w-3 h-3" />
+                    </button>
+                </div>
+
+                {showAssetMenu && (
+                    <div className="absolute top-full right-0 mt-2 w-56 bg-stone-800 rounded-lg shadow-xl border border-stone-700 p-2">
+                        <div className="text-xs font-medium text-stone-400 mb-2 px-2">Style</div>
+                        {['Cinematic', 'Anime', 'Cyberpunk', 'Watercolor', 'Sketch'].map(style => (
+                            <button
+                                key={style}
+                                onClick={() => setAssetOptions(prev => ({ ...prev, style }))}
+                                className={`w-full text-left px-2 py-1.5 text-xs rounded mb-1 transition-colors ${assetOptions.style === style ? 'bg-purple-600 text-white' : 'text-stone-300 hover:bg-stone-700'}`}
+                            >
+                                {style}
+                            </button>
+                        ))}
+                        
+                        <div className="h-px bg-stone-700 my-2" />
+                        
+                        <div className="space-y-1">
+                            <label className="flex items-center gap-2 px-2 py-1.5 hover:bg-stone-700 rounded cursor-pointer">
+                                <input 
+                                    type="checkbox" 
+                                    checked={assetOptions.addEffects}
+                                    onChange={e => setAssetOptions(prev => ({ ...prev, addEffects: e.target.checked }))}
+                                    className="rounded bg-stone-900 border-stone-600 text-purple-600 focus:ring-purple-600"
+                                />
+                                <span className="text-xs text-stone-300">Add Camera Effects</span>
+                            </label>
+                            <label className="flex items-center gap-2 px-2 py-1.5 hover:bg-stone-700 rounded cursor-pointer">
+                                <input 
+                                    type="checkbox" 
+                                    checked={assetOptions.autoPan}
+                                    onChange={e => setAssetOptions(prev => ({ ...prev, autoPan: e.target.checked }))}
+                                    className="rounded bg-stone-900 border-stone-600 text-purple-600 focus:ring-purple-600"
+                                />
+                                <span className="text-xs text-stone-300">Auto-Pan</span>
+                            </label>
+                        </div>
+                    </div>
+                )}
+            </div>
+
             <button 
                 onClick={handleExportXML}
                     className="p-2 hover:bg-stone-800 rounded-lg text-stone-400"
@@ -1109,8 +1254,108 @@ export function Editor() {
                     </div>
                 </div>
             </div>
+            
+            {/* Global Director Modal (Fixed at bottom center of main view) */}
+            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-50 w-full max-w-xl px-4 pointer-events-none">
+                <AnimatePresence>
+                {isGlobalPromptOpen ? (
+                    <motion.div 
+                        initial={{ y: 20, opacity: 0 }}
+                        animate={{ y: 0, opacity: 1 }}
+                        exit={{ y: 20, opacity: 0 }}
+                        className="bg-stone-900/90 backdrop-blur-xl border border-stone-700 rounded-xl shadow-2xl overflow-hidden pointer-events-auto"
+                    >
+                        <div className="flex items-center justify-between px-3 py-2 border-b border-stone-800 bg-stone-950/30">
+                            <div className="flex items-center gap-2 text-xs font-medium text-stone-400">
+                                <Sparkles className="w-3 h-3 text-purple-400" />
+                                Global Director
+                            </div>
+                            <button onClick={() => setIsGlobalPromptOpen(false)} className="text-stone-500 hover:text-white">
+                                <ChevronDown className="w-3 h-3" />
+                            </button>
+                        </div>
+                        <div className="p-2 flex gap-2">
+                            <input
+                                type="text"
+                                value={globalPrompt}
+                                onChange={(e) => setGlobalPrompt(e.target.value)}
+                                placeholder="Describe high-level changes (e.g. 'Make it darker', 'Add background music')..."
+                                className="flex-1 bg-stone-800/50 border border-stone-700/50 rounded-lg px-3 py-2 text-sm text-white placeholder-stone-500 focus:ring-1 focus:ring-purple-500 focus:border-purple-500 outline-none transition-all"
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                        alert("Global direction received (Mock): " + globalPrompt);
+                                        setGlobalPrompt('');
+                                    }
+                                }}
+                            />
+                            <button 
+                                onClick={() => {
+                                    alert("Global direction received (Mock): " + globalPrompt);
+                                    setGlobalPrompt('');
+                                }}
+                                className="bg-purple-600 hover:bg-purple-700 text-white p-2 rounded-lg transition-colors shadow-lg shadow-purple-900/20"
+                            >
+                                <Wand2 className="w-4 h-4" />
+                            </button>
+                        </div>
+                    </motion.div>
+                ) : (
+                    <motion.button 
+                        initial={{ y: 20, opacity: 0 }}
+                        animate={{ y: 0, opacity: 1 }}
+                        exit={{ y: 20, opacity: 0 }}
+                        onClick={() => setIsGlobalPromptOpen(true)}
+                        className="mx-auto bg-stone-900/90 backdrop-blur-md border border-stone-700 text-stone-400 px-4 py-2 rounded-full shadow-lg text-xs flex items-center gap-2 hover:text-white hover:border-stone-600 transition-all pointer-events-auto"
+                    >
+                        <Sparkles className="w-3 h-3 text-purple-400" />
+                        Global Director
+                        <ChevronUp className="w-3 h-3" />
+                    </motion.button>
+                )}
+                </AnimatePresence>
+            </div>
 
             </div>
+
+      {/* Save Modal */}
+      <AnimatePresence>
+        {showSaveModal && (
+            <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm">
+                <motion.div 
+                    initial={{ scale: 0.95, opacity: 0 }}
+                    animate={{ scale: 1, opacity: 1 }}
+                    exit={{ scale: 0.95, opacity: 0 }}
+                    className="bg-stone-900 border border-stone-700 rounded-xl shadow-2xl p-6 w-full max-w-md"
+                >
+                    <h3 className="text-lg font-bold text-white mb-4">Save Session</h3>
+                    <input 
+                        type="text" 
+                        value={saveName}
+                        onChange={(e) => setSaveName(e.target.value)}
+                        placeholder="Session Name"
+                        className="w-full bg-stone-800 border border-stone-700 rounded-lg px-4 py-2 text-white mb-6 focus:ring-2 focus:ring-purple-500 outline-none"
+                        autoFocus
+                        onKeyDown={(e) => e.key === 'Enter' && handleSaveConfirm()}
+                    />
+                    <div className="flex justify-end gap-3">
+                        <button 
+                            onClick={() => setShowSaveModal(false)}
+                            className="px-4 py-2 text-stone-400 hover:text-white transition-colors"
+                        >
+                            Cancel
+                        </button>
+                        <button 
+                            onClick={handleSaveConfirm}
+                            disabled={!saveName}
+                            className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50 font-medium"
+                        >
+                            Save Project
+                        </button>
+                    </div>
+                </motion.div>
+            </div>
+        )}
+      </AnimatePresence>
 
       {/* Right Sidebar */}
       <AgentSidebar 

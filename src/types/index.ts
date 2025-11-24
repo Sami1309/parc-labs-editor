@@ -34,4 +34,5 @@ export interface SavedStoryboardSession {
   selectedNodeIds?: string[];
   selectedNodeId?: string; // legacy support
   timestamp: number;
+  type?: 'storyboard' | 'edit';
 }

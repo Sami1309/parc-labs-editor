@@ -1,0 +1,62 @@
+{
+  "id": "1763960594554",
+  "name": "Edit 9:03:12 PM",
+  "storyboard": [
+    {
+      "id": "1",
+      "text": "This coin bought a Roman soldier food for a day. Two centuries later, you needed a sack full of them just to buy a loaf of bread. What happened?",
+      "image": "",
+      "notes": "Split screen comparison: A shiny silver Denarius (Augustus era) vs a dark, bronze-looking coin (Aurelian era). Text overlay: '98% Silver' vs '2% Silver'.",
+      "duration": 5,
+      "transition": "cut",
+      "type": "scene"
+    },
+    {
+      "id": "2",
+      "text": "In the early Empire, the Denarius was the backbone of the economy. It was nearly pure silver, trusted across the known world for trade and commerce.",
+      "image": "",
+      "notes": "Map of the Roman Empire showing trade routes glowing, with silver coins appearing over major cities.",
+      "duration": 5,
+      "transition": "cut",
+      "type": "scene"
+    },
+    {
+      "id": "3",
+      "text": "But running an empire is expensive. Constant wars, expanding borders, and lavish public games drained the treasury. The Emperors needed more money than they had.",
+      "image": "",
+      "notes": "Montage of Roman legions marching and construction of massive monuments.",
+      "duration": 5,
+      "transition": "cut",
+      "type": "scene"
+    },
+    {
+      "id": "4",
+      "text": "Instead of cutting costs, they cheated. The mints began adding cheap copper to the mix. Under Nero, it dropped to 90%. By the late 200s, the silver was practically gone.",
+      "image": "",
+      "notes": "Animation showing a silver coin being diluted with copper. A graphical line chart plummeting from top left to bottom right.",
+      "duration": 5,
+      "transition": "cut",
+      "type": "scene"
+    },
+    {
+      "id": "5",
+      "text": "The public panicked. Merchants raised prices to match the worthless coins. Hyperinflation set in, wiping out savings and destabilizing the very foundations of Rome.",
+      "image": "",
+      "notes": "A chaotic market scene with people arguing; price numbers floating in the air increasing rapidly.",
+      "duration": 5,
+      "transition": "cut",
+      "type": "scene"
+    },
+    {
+      "id": "6",
+      "text": "The Roman economy collapsed from the inside out. It serves as a timeless warning: a currency is only as strong as the trust behind it.",
+      "image": "",
+      "notes": "A single, worn-out debased coin spinning slowly and stopping as the light fades.",
+      "duration": 5,
+      "transition": "cut",
+      "type": "scene"
+    }
+  ],
+  "messages": [],
+  "timestamp": 1763960594554
+}

@@ -73,14 +73,15 @@ export function Storyboard({ researchNodes }: StoryboardProps) {
 
   // Load saved sessions
   useEffect(() => {
-    const saved = localStorage.getItem('storyboard_sessions');
-    if (saved) {
-      try {
-        setSavedSessions(JSON.parse(saved));
-      } catch (e) {
-        console.error('Failed to parse saved storyboard sessions', e);
-      }
-    }
+    fetch('/api/sessions')
+        .then(res => res.json())
+        .then(data => {
+            if (Array.isArray(data)) {
+                // Only show storyboards here
+                setSavedSessions(data.filter((s: SavedStoryboardSession) => !s.type || s.type === 'storyboard'));
+            }
+        })
+        .catch(e => console.error("Failed to load sessions", e));
   }, []);
 
   const append = (message: Omit<Message, 'id'>) => {
@@ -208,7 +209,7 @@ export function Storyboard({ researchNodes }: StoryboardProps) {
     }
   };
 
-  const saveSession = () => {
+  const saveSession = async () => {
       const nameToUse = sessionName || `Session ${new Date().toLocaleDateString()}`;
       const newSession: SavedStoryboardSession = {
           id: Date.now().toString(),
@@ -216,14 +217,27 @@ export function Storyboard({ researchNodes }: StoryboardProps) {
           selectedNodeIds,
           messages,
           storyboard,
-          timestamp: Date.now()
+          timestamp: Date.now(),
+          type: 'storyboard'
       };
       
-      const updatedSessions = [...savedSessions.filter(s => s.id !== newSession.id), newSession];
-      setSavedSessions(updatedSessions);
-      localStorage.setItem('storyboard_sessions', JSON.stringify(updatedSessions));
-      setSessionName(nameToUse);
-      alert('Storyboard session saved!');
+      try {
+        // Save to API (FileSystem)
+        await fetch('/api/sessions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(newSession)
+        });
+
+        // Update local state (optional if we re-fetch)
+        const updatedSessions = [...savedSessions.filter(s => s.id !== newSession.id), newSession];
+        setSavedSessions(updatedSessions);
+        setSessionName(nameToUse);
+        alert('Storyboard session saved!');
+      } catch (e) {
+          console.error("Failed to save storyboard", e);
+          alert("Failed to save storyboard.");
+      }
   };
 
   const loadSession = (session: SavedStoryboardSession) => {

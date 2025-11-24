@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 export async function POST(req: NextRequest) {
   try {
-    const { prompt, type = 'image', image } = await req.json();
+    const { prompt, type = 'image', image, aspectRatio = '16:9' } = await req.json();
 
     if (!prompt) {
       return NextResponse.json({ error: 'Prompt is required' }, { status: 400 });
@@ -30,8 +30,8 @@ export async function POST(req: NextRequest) {
             Requirements:
             - Use modern SVG features.
             - Ensure it is visually appealing and professional.
-            - Aspect Ratio: 16:9 (Widescreen cinematic).
-            - The SVG viewBox should be "0 0 1920 1080" or similar 16:9 ratio.
+            - Aspect Ratio: ${aspectRatio} (Widescreen cinematic).
+            - The SVG viewBox should respect the ${aspectRatio} ratio (e.g., "0 0 1920 1080" for 16:9).
             - If an input image was provided, use it as inspiration for shapes/colors (e.g. outline trace), but do not try to embed the raster image unless necessary (and if so, use data URI, but prefer vector graphics).
             - The output MUST be valid SVG code starting with <svg and ending with </svg>.
             - Do not wrap in markdown code blocks. Just return the code.
@@ -73,23 +73,34 @@ export async function POST(req: NextRequest) {
         // Image generation
         const model = 'models/gemini-2.5-flash-image'; 
         
+        const parts: any[] = [{ text: `${prompt}\n\nAspect Ratio: ${aspectRatio}` }];
+
+        if (image) {
+             // Expecting base64 data URI: "data:image/png;base64,..."
+             const base64Data = image.split(',')[1];
+             const mimeType = image.split(';')[0].split(':')[1];
+             if (base64Data && mimeType) {
+                 parts.push({
+                     inlineData: {
+                         mimeType,
+                         data: base64Data
+                     }
+                 });
+             }
+        }
+
         const contents = [
             {
                 role: 'user',
-                parts: [{ text: prompt }],
+                parts: parts,
             },
         ];
 
-        // For this specific model, we might need to follow its specific protocol.
-        // Often 'gemini-*-image' models do accept responseModalities: ['IMAGE'] or similar.
-        // Let's re-add it as per user's earlier successful snippet pattern if applicable, 
-        // or just rely on the model name which implies image.
-        // User said: "this is the model for generating images: models/gemini-2.5-flash-image"
-        
         const response = await ai.models.generateContent({
             model,
             config: {
                 responseModalities: ['IMAGE'],
+                aspectRatio: aspectRatio === '16:9' ? '16:9' : undefined, 
             },
             contents,
         });

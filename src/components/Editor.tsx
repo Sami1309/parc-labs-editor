@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { SavedStoryboardSession, TimelineItem } from '@/types';
-import { Play, Pause, Plus, Image as ImageIcon, Mic, Sparkles, Save, Download, Settings, Music, Video, FolderOpen, ChevronDown, ChevronUp, Loader2, Wand2, Maximize2, FileCode, Wand, MoveHorizontal, X, Edit3, Trash2, PanelRightOpen, PanelRightClose, ZoomIn, ZoomOut, GripVertical, MessageSquare } from 'lucide-react';
+import { Play, Pause, Plus, Image as ImageIcon, Mic, Sparkles, Save, Download, Settings, Music, Video, FolderOpen, ChevronDown, ChevronUp, Loader2, Wand2, Maximize2, FileCode, Wand, MoveHorizontal, X, Edit3, Trash2, PanelRightOpen, PanelRightClose, ZoomIn, ZoomOut, GripVertical, MessageSquare, Check } from 'lucide-react';
 import { motion, Reorder, AnimatePresence } from 'framer-motion';
 import { generateFCPXML } from '@/utils/xmlGenerator';
 import { AgentSidebar } from './AgentSidebar';
@@ -54,6 +54,80 @@ export function Editor() {
 
   const [showSaveModal, setShowSaveModal] = useState(false);
   const [saveName, setSaveName] = useState('');
+
+  // Fit Context State
+  const [showFitContext, setShowFitContext] = useState(false);
+  const [fitOptions, setFitOptions] = useState({
+      narration: true,
+      subtitles: true,
+      easing: true,
+      styling: false
+  });
+
+  const executeFitContext = async () => {
+      if (!activeItem) return;
+      setShowFitContext(false);
+      
+      const updates: Partial<TimelineItem> = {};
+      
+      // Subtitles
+      if (fitOptions.subtitles) {
+          updates.subtitles = activeItem.text;
+      }
+      
+      // Easing
+      if (fitOptions.easing && !activeItem.effect) {
+          const effects: TimelineItem['effect'][] = ['zoom-in', 'zoom-out', 'pan-left', 'pan-right'];
+           updates.effect = effects[Math.floor(Math.random() * effects.length)];
+      }
+
+      // Narration (Trigger Audio Gen)
+      if (fitOptions.narration && !activeItem.audioUrl) {
+           setTimeline(prev => prev.map(item => item.id === activeItem.id ? { ...item, isGeneratingAudio: true } : item));
+           
+           try {
+                const response = await fetch('/api/elevenlabs', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: activeItem.text })
+                });
+                if (response.ok) {
+                    const blob = await response.blob();
+                    const audioUrl = URL.createObjectURL(blob);
+                    
+                    // Get Duration
+                    const audio = new Audio(audioUrl);
+                    audio.onloadedmetadata = () => {
+                        setTimeline(prev => prev.map(item => {
+                            if (item.id === activeItem.id) {
+                                return { 
+                                    ...item, 
+                                    ...updates,
+                                    audioUrl, 
+                                    isGeneratingAudio: false,
+                                    duration: Math.max(item.duration, Math.ceil(audio.duration)) 
+                                };
+                            }
+                            return item;
+                        }));
+                    };
+                    return; // Early return as we update inside onloadedmetadata
+                } else {
+                     setTimeline(prev => prev.map(item => item.id === activeItem.id ? { ...item, isGeneratingAudio: false } : item));
+                }
+           } catch (e) {
+               console.error("Audio gen failed", e);
+               setTimeline(prev => prev.map(item => item.id === activeItem.id ? { ...item, isGeneratingAudio: false } : item));
+           }
+      }
+
+      // Styling (Placeholder for now)
+      if (fitOptions.styling) {
+           // We could trigger regeneration here if we wanted
+      }
+      
+      setTimeline(prev => prev.map(item => item.id === activeItem.id ? { ...item, ...updates } : item));
+  };
 
   // Keyboard Shortcuts (Spacebar Play/Pause, Delete)
   useEffect(() => {
@@ -853,7 +927,19 @@ export function Editor() {
 
       return (
           <RefineAssetFlow 
-              onBack={() => {
+              onBack={(data) => {
+                  // Save progress even on back
+                  if (data && activeItem) {
+                      setTimeline(prev => prev.map(item => {
+                          if (item.id === activeItem.id) {
+                              return {
+                                  ...item,
+                                  refinementData: data
+                              };
+                          }
+                          return item;
+                      }));
+                  }
                   setEditorMode('timeline');
                   setAssetToRefine(null);
               }}
@@ -864,6 +950,25 @@ export function Editor() {
               globalContext={globalContext}
               assetFile={assetToRefine || undefined}
               assetType={assetToRefine?.type.startsWith('video') ? 'video' : 'image'}
+              initialData={activeItem?.refinementData}
+              onSave={(result, type, data) => {
+                  if (activeItem) {
+                      setTimeline(prev => prev.map(item => {
+                          if (item.id === activeItem.id) {
+                              return {
+                                  ...item,
+                                  image: type === 'image' ? result : undefined,
+                                  motion: type === 'motion' ? result : undefined,
+                                  type: 'scene',
+                                  refinementData: data
+                              };
+                          }
+                          return item;
+                      }));
+                  }
+                  setEditorMode('timeline');
+                  setAssetToRefine(null);
+              }}
           />
       );
   }
@@ -1064,6 +1169,8 @@ export function Editor() {
                                     transition={{ duration: activeItem.duration, ease: "linear" }}
                                         className="w-full h-full object-cover"
                                />
+                           ) : activeItem.motion ? (
+                               <div className="w-full h-full bg-black" dangerouslySetInnerHTML={{ __html: activeItem.motion }} />
                            ) : (
                                <div className="w-full h-full flex items-center justify-center text-stone-600">
                                    <div className="text-center">
@@ -1077,6 +1184,76 @@ export function Editor() {
                                    <p className="text-white text-lg font-medium text-shadow-lg bg-black/40 inline-block px-6 py-3 rounded-xl backdrop-blur-md border border-white/10">
                                    {activeItem.text}
                                    </p>
+                                   {activeItem.subtitles && (
+                                       <div className="mt-2 text-yellow-300 text-sm font-semibold text-shadow-md bg-black/60 inline-block px-4 py-1 rounded-full">
+                                           {activeItem.subtitles}
+                                       </div>
+                                   )}
+                           </div>
+                           
+                           {/* Preview Actions */}
+                           <div className="absolute bottom-4 right-4 flex items-center gap-2 z-20">
+                                <button 
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleRefineRequest();
+                                    }}
+                                    className="flex items-center gap-2 bg-stone-800/80 hover:bg-purple-600/90 backdrop-blur-md border border-white/10 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition-all shadow-lg"
+                                >
+                                    <Wand2 size={12} />
+                                    Refine Asset
+                                </button>
+                                
+                                <div className="relative">
+                                    <button
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            setShowFitContext(!showFitContext);
+                                        }}
+                                        className="flex items-center gap-2 bg-stone-800/80 hover:bg-blue-600/90 backdrop-blur-md border border-white/10 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition-all shadow-lg"
+                                    >
+                                        <Sparkles size={12} />
+                                        Fit into Context
+                                        <ChevronDown size={10} className={`transition-transform ${showFitContext ? 'rotate-180' : ''}`} />
+                                    </button>
+                                    
+                                    <AnimatePresence>
+                                        {showFitContext && (
+                                            <motion.div
+                                                initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                                                animate={{ opacity: 1, y: 0, scale: 1 }}
+                                                exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                                                className="absolute bottom-full right-0 mb-2 w-48 bg-stone-900 border border-stone-700 rounded-xl shadow-2xl overflow-hidden p-2"
+                                                onClick={(e) => e.stopPropagation()}
+                                            >
+                                                <div className="text-[10px] font-bold text-stone-500 uppercase px-2 py-1 mb-1">Context Options</div>
+                                                <div className="space-y-1">
+                                                    {Object.entries(fitOptions).map(([key, value]) => (
+                                                        <label key={key} className="flex items-center gap-2 px-2 py-1.5 hover:bg-stone-800 rounded cursor-pointer group">
+                                                            <div className={`w-3 h-3 rounded border flex items-center justify-center transition-colors ${value ? 'bg-blue-500 border-blue-500' : 'border-stone-600 group-hover:border-stone-500'}`}>
+                                                                {value && <Check size={8} className="text-white" />}
+                                                            </div>
+                                                            <input 
+                                                                type="checkbox" 
+                                                                checked={value}
+                                                                onChange={(e) => setFitOptions(prev => ({ ...prev, [key]: e.target.checked }))}
+                                                                className="hidden"
+                                                            />
+                                                            <span className="text-xs text-stone-300 capitalize">{key}</span>
+                                                        </label>
+                                                    ))}
+                                                </div>
+                                                <div className="h-px bg-stone-800 my-2" />
+                                                <button 
+                                                    onClick={executeFitContext}
+                                                    className="w-full bg-blue-600 hover:bg-blue-500 text-white py-1.5 rounded text-xs font-bold transition-colors"
+                                                >
+                                                    Initiate Fit
+                                                </button>
+                                            </motion.div>
+                                        )}
+                                    </AnimatePresence>
+                                </div>
                            </div>
                         </motion.div>
                     )}

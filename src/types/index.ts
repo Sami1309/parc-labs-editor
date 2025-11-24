@@ -1,8 +1,23 @@
+export interface GeneratedVersion {
+    url: string;
+    type: 'image' | 'motion';
+    prompt: string;
+    timestamp: number;
+}
+
 export interface StoryboardScene {
   id: string;
   text: string;
   image?: string;
+  motion?: string; // New field for SVG content
   notes?: string;
+  subtitles?: string; // New field for subtitles
+  refinementData?: {
+    versions: GeneratedVersion[];
+    prompt: string;
+    selectedVersionIndex: number;
+    visualType: 'image' | 'motion';
+  };
 }
 
 export interface TimelineItem extends StoryboardScene {

@@ -42,7 +42,18 @@ Add these as **Secret** values (Render will mask them):
 - Environment changes (new API key, etc.): Render → Service → Environment → **Add/Update Secret** → **Save** → **Manual Deploy** to pick up changes.
 - If you edit `render.yaml` (build/start commands, health check, region), push to the branch; Render will re-read it on the next deploy.
 
-## 8) Local parity check (optional)
+## 8) IP Tracking & Unique Logins
+The app includes a basic unique IP tracking system:
+- **Mechanism**: Reads `X-Forwarded-For` header (correct for Render) in `RootLayout`.
+- **Storage**: Logs unique IPs to `data/ip-logs.json`.
+- **Visibility**:
+  - Console logs: "ip_tracked" events appear in Render logs.
+  - API: View stats at `/api/ip-stats`.
+- **Important**: File-based storage (`data/` folder) is **ephemeral** on Render's free/standard web services. It will reset on every deploy or restart.
+  - To persist this data, attach a Render Disk (requires paid plan) and mount it to `/opt/render/project/src/data` (or update `ip-tracker.ts` path).
+  - Alternatively, use a managed database (Postgres) for production-grade persistence.
+
+## 9) Local parity check (optional)
 - Run `npm ci`, then `npm run build`, then `npm run start`; ensure it boots on `http://localhost:3000` before pushing.
 
 That’s it—once the service is green on Render, the app is live on the provided URL.

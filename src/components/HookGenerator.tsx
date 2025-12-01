@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Card } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import { ChannelBreakdown } from './ChannelBreakdown';
+import { TutorialOverlay } from './TutorialOverlay';
 
 interface TrendingVideo {
   id: string;

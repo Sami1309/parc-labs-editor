@@ -19,6 +19,7 @@ import StartNode from './nodes/StartNode';
 import ResultNode from './nodes/ResultNode';
 import { PromptBar } from './PromptBar';
 import { ResearchDialog } from './ResearchDialog';
+import { TutorialOverlay } from './TutorialOverlay';
 
 import { Plus, Save, FolderOpen, ChevronDown, Trash2, RotateCcw } from 'lucide-react';
 
@@ -44,6 +45,9 @@ interface ResearchFlowProps {
   setEdges: React.Dispatch<React.SetStateAction<Edge[]>>;
   sessionName: string | null;
   setSessionName: (name: string | null) => void;
+  showTutorial?: boolean;
+  onNextTutorial?: () => void;
+  onCloseTutorial?: () => void;
 }
 
 export default function ResearchFlow({
@@ -55,6 +59,9 @@ export default function ResearchFlow({
   setEdges,
   sessionName,
   setSessionName,
+  showTutorial,
+  onNextTutorial,
+  onCloseTutorial
 }: ResearchFlowProps) {
   // UI State
   const [promptState, setPromptState] = useState<{ isOpen: boolean; nodeId: string | null }>({
@@ -393,6 +400,17 @@ export default function ResearchFlow({
   return (
     <div className="w-full h-screen bg-stone-50 relative">
       <div className="absolute top-4 left-4 z-10 flex items-center gap-2">
+        {showTutorial && (
+            <TutorialOverlay
+                step={1}
+                totalSteps={4}
+                onNext={onNextTutorial!}
+                onClose={onCloseTutorial!}
+                content="Click the 'Start Research' node to begin. Use 'Direct Research' on result nodes to dive deeper into specific topics."
+                position="bottom"
+                className="top-16 left-4"
+            />
+        )}
         <button
             onClick={handleNewResearch}
             className="bg-white p-2 rounded-lg shadow-md border border-stone-200 hover:bg-stone-50 text-stone-600 transition-colors flex items-center gap-2"

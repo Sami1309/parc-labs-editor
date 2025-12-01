@@ -7,12 +7,16 @@ import { motion, AnimatePresence } from 'framer-motion';
 import ReactMarkdown from 'react-markdown';
 import { StoryboardScene, Message, SavedStoryboardSession } from '@/types';
 import { RefineAssetFlow } from './RefineAssetFlow';
+import { TutorialOverlay } from './TutorialOverlay';
 
 interface StoryboardProps {
   researchNodes: Node[];
+  showTutorial?: boolean;
+  onNextTutorial?: () => void;
+  onCloseTutorial?: () => void;
 }
 
-export function Storyboard({ researchNodes }: StoryboardProps) {
+export function Storyboard({ researchNodes, showTutorial, onNextTutorial, onCloseTutorial }: StoryboardProps) {
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
   const [storyboard, setStoryboard] = useState<StoryboardScene[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -434,7 +438,18 @@ export function Storyboard({ researchNodes }: StoryboardProps) {
       </AnimatePresence>
 
       {/* Left Panel: Chat */}
-      <div className="w-1/3 min-w-[350px] border-r border-stone-200 flex flex-col bg-white">
+      <div className="w-1/3 min-w-[350px] border-r border-stone-200 flex flex-col bg-white relative">
+        {showTutorial && (
+            <TutorialOverlay
+                step={2}
+                totalSteps={4}
+                onNext={onNextTutorial!}
+                onClose={onCloseTutorial!}
+                content="Chat with the assistant to build your story. Select research nodes from the 'Available Research' panel to give the AI context."
+                position="top"
+                className="bottom-24 left-4 z-50 w-72"
+            />
+        )}
         <div className="p-4 border-b border-stone-100 flex items-center justify-between bg-stone-50/50">
            <div className="flex items-center gap-2">
              <Sparkles className="w-4 h-4 text-purple-600" />

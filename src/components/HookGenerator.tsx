@@ -1,12 +1,13 @@
 'use client';
 
 import React, { useState, useRef, useEffect } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
 import { Sparkles, RefreshCw, Play, Search, ThumbsUp, Loader2, Check, X, Image as ImageIcon, ArrowLeft, Plus, BarChart2, TrendingUp, Activity, Eye, Heart, Users, Calendar, Clock, Settings2, ListPlus, Trash2, Save, FolderOpen, PanelRightOpen, PanelRightClose, Minus, ChevronRight, ChevronLeft } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
-import { motion, AnimatePresence } from 'framer-motion';
+import { ChannelBreakdown } from './ChannelBreakdown';
 
 interface TrendingVideo {
   id: string;
@@ -47,6 +48,9 @@ interface ContextStack {
 
 interface HookGeneratorProps {
   onStartResearch?: (data: { title: string, hook: string, image?: string }) => void;
+  showTutorial?: boolean;
+  onNextTutorial?: () => void;
+  onCloseTutorial?: () => void;
 }
 
 // Recency options
@@ -131,8 +135,8 @@ const loadFromDB = async (storeName: string) => {
 };
 
 
-export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
-  const [activeTab, setActiveTab] = useState<'trends' | 'outliers' | 'studio'>('trends');
+export function HookGenerator({ onStartResearch, showTutorial, onNextTutorial, onCloseTutorial }: HookGeneratorProps) {
+  const [activeTab, setActiveTab] = useState<'trends' | 'outliers' | 'studio' | 'breakdown'>('outliers');
   const [studioTab, setStudioTab] = useState<'generate' | 'saved'>('generate');
   const [isLoading, setIsLoading] = useState(false);
   const [videos, setVideos] = useState<TrendingVideo[]>([]);
@@ -141,7 +145,7 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
   const [previewVideo, setPreviewVideo] = useState<TrendingVideo | null>(null); 
   const [generatedHooks, setGeneratedHooks] = useState<HookIdea[]>([]);
   const [savedHooks, setSavedHooks] = useState<HookIdea[]>([]); 
-  const [searchQuery, setSearchQuery] = useState('');
+  const [searchQuery, setSearchQuery] = useState('AI Automation');
   const [filter, setFilter] = useState<string>('');
   const [recency, setRecency] = useState<string>('');
   
@@ -558,22 +562,28 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
                 <div className="flex items-center gap-2">
                     <div className="flex bg-stone-100 p-1 rounded-lg">
                         <button 
-                        onClick={() => { setActiveTab('trends'); setSelectedVideo(null); }}
-                        className={cn("px-3 py-1.5 rounded-md text-sm font-medium transition-all", activeTab === 'trends' ? "bg-white shadow text-stone-900" : "text-stone-600 hover:text-stone-900")}
-                        >
-                            <TrendingUp className="inline-block mr-2 w-4 h-4" /> Feed
-                        </button>
-                        <button 
                         onClick={() => { setActiveTab('outliers'); setSelectedVideo(null); }}
                         className={cn("px-3 py-1.5 rounded-md text-sm font-medium transition-all", activeTab === 'outliers' ? "bg-white shadow text-stone-900" : "text-stone-600 hover:text-stone-900")}
                         >
                             <Activity className="inline-block mr-2 w-4 h-4" /> Outlier Analysis
                         </button>
                         <button 
+                        onClick={() => { setActiveTab('trends'); setSelectedVideo(null); }}
+                        className={cn("px-3 py-1.5 rounded-md text-sm font-medium transition-all", activeTab === 'trends' ? "bg-white shadow text-stone-900" : "text-stone-600 hover:text-stone-900")}
+                        >
+                            <TrendingUp className="inline-block mr-2 w-4 h-4" /> Feed
+                        </button>
+                        <button 
                         onClick={() => setActiveTab('studio')}
                         className={cn("px-3 py-1.5 rounded-md text-sm font-medium transition-all", activeTab === 'studio' ? "bg-white shadow text-stone-900" : "text-stone-600 hover:text-stone-900")}
                         >
                             <Sparkles className="inline-block mr-2 w-4 h-4" /> Hook Studio
+                        </button>
+                        <button 
+                        onClick={() => setActiveTab('breakdown')}
+                        className={cn("px-3 py-1.5 rounded-md text-sm font-medium transition-all", activeTab === 'breakdown' ? "bg-white shadow text-stone-900" : "text-stone-600 hover:text-stone-900")}
+                        >
+                            <Search className="inline-block mr-2 w-4 h-4" /> Channel Analysis
                         </button>
                     </div>
                 
@@ -590,7 +600,18 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
         
         {/* Search & Filters - Only show in Feed/Outliers */}
         {activeTab !== 'studio' && (
-            <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="flex flex-wrap items-center justify-between gap-4 relative">
+                {showTutorial && (
+                    <TutorialOverlay
+                        step={0}
+                        totalSteps={4}
+                        onNext={onNextTutorial!}
+                        onClose={onCloseTutorial!}
+                        content="Enter a topic here to find viral videos. We'll analyze their performance to help you spot outlier opportunities."
+                        position="bottom"
+                        className="top-12 left-0"
+                    />
+                )}
                 <div className="flex gap-2 w-full max-w-lg">
                     <Input 
                         placeholder={activeTab === 'outliers' ? "Enter niche to analyze outliers..." : "Search topic..."}
@@ -969,6 +990,8 @@ export function HookGenerator({ onStartResearch }: HookGeneratorProps) {
                     )}
                 </div>
             )}
+
+            {activeTab === 'breakdown' && <ChannelBreakdown />}
             </div>
 
         {/* Right Sidebar (Context Stack) */}
